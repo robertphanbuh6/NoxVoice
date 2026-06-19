@@ -1,0 +1,121 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+    font-family: Arial, sans-serif;
+}
+
+/* MAIN LAYOUT */
+body {
+    background: #1e1f22;
+    color: white;
+}
+
+/* APP WRAPPER */
+.app {
+    display: flex;
+    height: 100vh;
+}
+
+/* SIDEBAR */
+.sidebar {
+    width: 280px;
+    background: #2b2d31;
+    padding: 15px;
+    display: flex;
+    flex-direction: column;
+}
+
+/* TITLE */
+.title {
+    font-size: 20px;
+    font-weight: bold;
+    margin-bottom: 15px;
+}
+
+/* INPUTS */
+input {
+    margin: 5px 0;
+    padding: 10px;
+    border: none;
+    border-radius: 6px;
+    background: #1e1f22;
+    color: white;
+    outline: none;
+}
+
+/* BUTTONS */
+button {
+    margin: 5px 0;
+    padding: 10px;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    background: #5865f2;
+    color: white;
+    font-weight: bold;
+    transition: 0.2s;
+}
+
+button:hover {
+    background: #4752c4;
+}
+
+/* MUTE SPECIAL STYLE */
+#muteBtn {
+    background: #da373c;
+}
+
+#muteBtn:hover {
+    background: #b32c30;
+}
+
+/* STATUS */
+#status {
+    margin-top: 10px;
+    font-size: 14px;
+    color: #b5bac1;
+}
+
+/* DIVIDER */
+.divider {
+    height: 1px;
+    background: #3f4147;
+    margin: 10px 0;
+}
+
+/* USER LIST */
+ul {
+    list-style: none;
+    margin-top: 5px;
+}
+
+ul li {
+    background: #1e1f22;
+    margin: 5px 0;
+    padding: 8px;
+    border-radius: 6px;
+    font-size: 14px;
+}
+
+/* MAIN AREA */
+.main {
+    flex: 1;
+    background: #313338;
+    display: flex;
+    flex-direction: column;
+}
+
+/* HEADER */
+.header {
+    background: #2b2d31;
+    padding: 15px;
+    font-size: 18px;
+    font-weight: bold;
+}
+
+/* CONTENT */
+.content {
+    padding: 20px;
+    color: #b5bac1;
+}

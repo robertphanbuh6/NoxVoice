@@ -1,3 +1,264 @@
+<<<<<<< HEAD
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+    font-family: Arial, Helvetica, sans-serif;
+}
+
+body {
+    min-height: 100vh;
+    background: linear-gradient(135deg, #0f1117, #1e1f2f);
+    color: #ffffff;
+}
+
+/* MAIN APP LAYOUT */
+.app {
+    display: flex;
+    width: 100%;
+    min-height: 100vh;
+}
+
+/* FALLBACK IF YOU ARE USING .container IN HTML */
+.container {
+    width: 420px;
+    max-width: 95%;
+    margin: 60px auto;
+    background: #1f2128;
+    padding: 24px;
+    border-radius: 18px;
+    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.45);
+}
+
+/* SIDEBAR */
+.sidebar {
+    width: 300px;
+    min-height: 100vh;
+    background: #191b22;
+    padding: 20px;
+    border-right: 1px solid #2f3340;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+}
+
+/* MAIN CONTENT */
+.main {
+    flex: 1;
+    background: #232630;
+    min-height: 100vh;
+}
+
+.header {
+    height: 64px;
+    background: #1c1f27;
+    border-bottom: 1px solid #343846;
+    display: flex;
+    align-items: center;
+    padding: 0 24px;
+    font-size: 20px;
+    font-weight: bold;
+}
+
+.content {
+    padding: 24px;
+    color: #b8beca;
+}
+
+/* TITLES */
+.title,
+h1,
+h2,
+h3,
+h4 {
+    color: #ffffff;
+    margin-bottom: 12px;
+}
+
+.title {
+    font-size: 22px;
+    font-weight: bold;
+    color: #ffffff;
+}
+
+/* INPUTS */
+input {
+    width: 100%;
+    padding: 12px 14px;
+    margin: 6px 0;
+    border: 1px solid #343846;
+    border-radius: 10px;
+    background: #111318;
+    color: #ffffff;
+    outline: none;
+    font-size: 14px;
+}
+
+input::placeholder {
+    color: #777d8c;
+}
+
+input:focus {
+    border-color: #5865f2;
+    box-shadow: 0 0 0 3px rgba(88, 101, 242, 0.2);
+}
+
+/* BUTTONS */
+button {
+    width: 100%;
+    padding: 12px 14px;
+    margin: 6px 0;
+    border: none;
+    border-radius: 10px;
+    background: #5865f2;
+    color: #ffffff;
+    font-size: 14px;
+    font-weight: bold;
+    cursor: pointer;
+    transition: 0.2s ease;
+}
+
+button:hover {
+    background: #4752c4;
+    transform: translateY(-1px);
+}
+
+button:active {
+    transform: scale(0.98);
+}
+
+/* MAIN ACTION BUTTONS */
+#joinBtn {
+    background: #3ba55d;
+}
+
+#joinBtn:hover {
+    background: #2d8f4d;
+}
+
+#voiceBtn {
+    background: #5865f2;
+}
+
+#muteBtn {
+    background: #da373c;
+}
+
+#muteBtn:hover {
+    background: #b92f33;
+}
+
+/* STATUS */
+#status {
+    margin: 12px 0;
+    padding: 10px;
+    border-radius: 10px;
+    background: #111318;
+    color: #b8beca;
+    font-size: 14px;
+    text-align: center;
+}
+
+/* DIVIDER */
+.divider {
+    height: 1px;
+    background: #343846;
+    margin: 12px 0;
+}
+
+/* USER LIST */
+#userList {
+    list-style: none;
+    margin-top: 10px;
+    padding: 0;
+}
+
+#userList li {
+    display: flex !important;
+    justify-content: space-between !important;
+    align-items: center !important;
+    gap: 10px !important;
+    padding: 10px 12px !important;
+    margin: 8px 0 !important;
+    background: #111318 !important;
+    border: 1px solid #2f3340;
+    border-radius: 12px !important;
+    color: #ffffff;
+    font-size: 14px;
+}
+
+/* USER NAME */
+#userList li span {
+    flex: 1;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+/* MUTE BUTTON NEXT TO USERS */
+#userList li button {
+    width: 44px !important;
+    height: 34px !important;
+    min-width: 44px;
+    padding: 0 !important;
+    margin: 0 !important;
+    border-radius: 8px !important;
+    background: #5865f2 !important;
+    color: white !important;
+    font-size: 16px;
+}
+
+#userList li button:hover {
+    background: #4752c4 !important;
+}
+
+/* DISABLED SELF USER BUTTON */
+#userList li button:disabled {
+    opacity: 0.4 !important;
+    cursor: not-allowed !important;
+}
+
+/* AUDIO ELEMENTS CREATED BY JS */
+audio {
+    width: 260px;
+    max-width: 90%;
+    margin: 10px;
+    border-radius: 10px;
+    background: #111318;
+}
+
+/* VOLUME SLIDER IF YOU ADD ONE LATER */
+.volume-slider,
+input[type="range"] {
+    accent-color: #5865f2;
+}
+
+/* MOBILE RESPONSIVE */
+@media (max-width: 768px) {
+    .app {
+        flex-direction: column;
+    }
+
+    .sidebar {
+        width: 100%;
+        min-height: auto;
+        border-right: none;
+        border-bottom: 1px solid #343846;
+    }
+
+    .main {
+        min-height: auto;
+    }
+
+    .container {
+        margin: 20px auto;
+    }
+
+    .header {
+        height: auto;
+        padding: 16px;
+    }
+=======
 body {
     margin: 0;
     font-family: Arial;
@@ -42,4 +303,5 @@ button:hover {
 #userList {
     list-style: none;
     padding: 0;
+>>>>>>> b85b587b2eed11a3a5fcd7b0049ad68fba49fb7d
 }
