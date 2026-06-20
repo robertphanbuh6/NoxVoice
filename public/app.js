@@ -1,4 +1,4 @@
-console.log("NOXVOICE APP LOADED - VOICE + 1080P60 STREAM");
+console.log("NOXVOICE APP LOADED - VOICE + SCREEN STREAM FIXED");
 
 const socket = io();
 
@@ -8,29 +8,34 @@ const roomCode = document.getElementById("roomCode");
 const joinBtn = document.getElementById("joinBtn");
 const voiceBtn = document.getElementById("voiceBtn");
 const muteBtn = document.getElementById("muteBtn");
-const streamBtn = document.getElementById("streamBtn");
-const stopStreamBtn = document.getElementById("stopStreamBtn");
 const logoutBtn = document.getElementById("logoutBtn");
 const status = document.getElementById("status");
 const userList = document.getElementById("userList");
 const accountName = document.getElementById("accountName");
 
-const localStreamBox = document.getElementById("localStreamBox");
-const localPreview = document.getElementById("localPreview");
-const remoteStreams = document.getElementById("remoteStreams");
+/*
+    Add this button in HTML if you have not added it yet:
+
+    <button id="streamBtn">🖥️ Start Stream</button>
+*/
+const streamBtn =
+    document.getElementById("streamBtn") ||
+    document.getElementById("screenBtn") ||
+    document.getElementById("shareBtn");
 
 /* ================= STATE ================= */
-let localStream = null;
-let screenStream = null;
+let localStream = null;      // microphone stream ONLY
+let screenStream = null;     // screen stream ONLY
+let screenTrack = null;
 
 let micReady = false;
 let muted = false;
+let isStreaming = false;
 let loggedInUsername = null;
 
 const peers = {};
 const userVolumes = {};
 const userMuted = {};
-const screenSenders = {};
 
 /* ================= ICE SERVERS ================= */
 const config = {
@@ -40,6 +45,16 @@ const config = {
         },
         {
             urls: "stun:stun1.l.google.com:19302"
+        },
+        {
+            urls: "turn:relay.metered.ca:80",
+            username: "openrelayproject",
+            credential: "openrelayproject"
+        },
+        {
+            urls: "turn:relay.metered.ca:443",
+            username: "openrelayproject",
+            credential: "openrelayproject"
         }
     ]
 };
@@ -57,10 +72,14 @@ async function checkLogin() {
 
         loggedInUsername = data.username;
 
-        username.value = data.username;
-        username.readOnly = true;
+        if (username) {
+            username.value = data.username;
+            username.readOnly = true;
+        }
 
-        accountName.innerText = "Signed in as: " + data.username;
+        if (accountName) {
+            accountName.innerText = "Signed in as: " + data.username;
+        }
 
         console.log("LOGGED IN AS:", data.username);
 
@@ -77,19 +96,18 @@ socket.on("connect", () => {
     console.log("CONNECTED:", socket.id);
 });
 
-/* ================= JOIN ERROR ================= */
-socket.on("join-error", (data) => {
-    alert(data.message);
-    status.innerText = data.message;
-});
-
 /* ================= ENABLE MIC ================= */
 voiceBtn.onclick = async () => {
 
     try {
 
         localStream = await navigator.mediaDevices.getUserMedia({
-            audio: true
+            audio: {
+                echoCancellation: true,
+                noiseSuppression: true,
+                autoGainControl: true
+            },
+            video: false
         });
 
         micReady = true;
@@ -98,10 +116,13 @@ voiceBtn.onclick = async () => {
 
         status.innerText = "Mic ON 🎤";
 
+        Object.values(peers).forEach((peer) => {
+            addMicTracksToPeer(peer);
+        });
+
     } catch (err) {
 
         console.error("MIC ERROR:", err);
-
         alert("Microphone permission denied");
     }
 };
@@ -130,14 +151,15 @@ muteBtn.onclick = () => {
 };
 
 /* ================= LOGOUT ================= */
-logoutBtn.onclick = async () => {
+if (logoutBtn) {
+    logoutBtn.onclick = async () => {
+        await fetch("/api/logout", {
+            method: "POST"
+        });
 
-    await fetch("/api/logout", {
-        method: "POST"
-    });
-
-    window.location.href = "/login.html";
-};
+        window.location.href = "/login.html";
+    };
+}
 
 /* ================= JOIN ROOM ================= */
 joinBtn.onclick = () => {
@@ -158,8 +180,177 @@ joinBtn.onclick = () => {
         room: room
     });
 
-    status.innerText = "Joining room: " + room;
+    status.innerText = "Joined room: " + room;
 };
+
+/* ================= TRACK HELPERS ================= */
+function addMicTracksToPeer(peer) {
+
+    if (!localStream) {
+        return;
+    }
+
+    localStream.getAudioTracks().forEach((track) => {
+
+        const alreadyAdded = peer.getSenders().some(
+            sender => sender.track === track
+        );
+
+        if (!alreadyAdded) {
+            peer.addTrack(track, localStream);
+        }
+    });
+}
+
+function addScreenTrackToPeer(peer) {
+
+    if (!screenStream || !screenTrack) {
+        return;
+    }
+
+    const alreadyAdded = peer.getSenders().some(
+        sender => sender.track === screenTrack
+    );
+
+    if (!alreadyAdded) {
+        peer.addTrack(screenTrack, screenStream);
+    }
+}
+
+function removeScreenTrackFromPeer(peer) {
+
+    const senders = peer.getSenders();
+
+    senders.forEach((sender) => {
+        if (sender.track && sender.track.kind === "video") {
+            peer.removeTrack(sender);
+        }
+    });
+}
+
+async function renegotiatePeer(targetId) {
+
+    const peer = peers[targetId];
+
+    if (!peer) {
+        return;
+    }
+
+    try {
+
+        const offer = await peer.createOffer();
+
+        await peer.setLocalDescription(offer);
+
+        socket.emit("offer", {
+            target: targetId,
+            offer: offer
+        });
+
+    } catch (err) {
+        console.error("RENEGOTIATION ERROR:", err);
+    }
+}
+
+/* ================= SCREEN STREAM BUTTON ================= */
+if (streamBtn) {
+
+    streamBtn.onclick = async () => {
+
+        if (!isStreaming) {
+            await startScreenStream();
+        } else {
+            await stopScreenStream();
+        }
+    };
+}
+
+async function startScreenStream() {
+
+    try {
+
+        /*
+            IMPORTANT:
+            Do NOT write:
+            localStream = await getDisplayMedia(...)
+
+            That breaks microphone voice.
+
+            Screen stream must stay separate.
+        */
+        screenStream = await navigator.mediaDevices.getDisplayMedia({
+            video: true,
+            audio: false
+        });
+
+        screenTrack = screenStream.getVideoTracks()[0];
+
+        if (!screenTrack) {
+            alert("No screen video track found");
+            return;
+        }
+
+        isStreaming = true;
+
+        if (streamBtn) {
+            streamBtn.innerText = "🛑 Stop Stream";
+        }
+
+        status.innerText = "Screen streaming 🖥️";
+
+        Object.keys(peers).forEach(async (id) => {
+            const peer = peers[id];
+
+            addScreenTrackToPeer(peer);
+
+            await renegotiatePeer(id);
+        });
+
+        screenTrack.onended = async () => {
+            await stopScreenStream();
+        };
+
+        console.log("SCREEN STREAM STARTED");
+
+    } catch (err) {
+        console.error("SCREEN STREAM ERROR:", err);
+        alert("Screen stream cancelled or blocked");
+    }
+}
+
+async function stopScreenStream() {
+
+    if (!isStreaming) {
+        return;
+    }
+
+    isStreaming = false;
+
+    if (screenStream) {
+        screenStream.getTracks().forEach(track => {
+            track.stop();
+        });
+    }
+
+    screenStream = null;
+    screenTrack = null;
+
+    if (streamBtn) {
+        streamBtn.innerText = "🖥️ Start Stream";
+    }
+
+    status.innerText = "Screen stream stopped";
+
+    Object.keys(peers).forEach(async (id) => {
+        const peer = peers[id];
+
+        removeScreenTrackFromPeer(peer);
+
+        await renegotiatePeer(id);
+    });
+
+    console.log("SCREEN STREAM STOPPED");
+}
 
 /* ================= CREATE PEER ================= */
 function createPeer(id) {
@@ -196,32 +387,26 @@ function createPeer(id) {
 
         console.log("TRACK RECEIVED FROM:", id, event.track.kind);
 
-        if (event.track.kind === "video") {
-            createRemoteVideo(id, event.streams[0]);
-            return;
+        if (event.track.kind === "audio") {
+            handleRemoteAudio(id, event);
         }
 
-        if (event.track.kind === "audio") {
-            createRemoteAudio(id, event.streams[0]);
+        if (event.track.kind === "video") {
+            handleRemoteVideo(id, event);
         }
     };
 
-    if (localStream) {
+    addMicTracksToPeer(peer);
 
-        localStream.getTracks().forEach(track => {
-            peer.addTrack(track, localStream);
-        });
-    }
-
-    if (screenStream) {
-        addScreenTracksToPeer(id, peer);
+    if (isStreaming && screenTrack) {
+        addScreenTrackToPeer(peer);
     }
 
     return peer;
 }
 
 /* ================= REMOTE AUDIO ================= */
-function createRemoteAudio(id, stream) {
+function handleRemoteAudio(id, event) {
 
     let audio = document.getElementById("audio-" + id);
 
@@ -239,7 +424,7 @@ function createRemoteAudio(id, stream) {
         document.body.appendChild(audio);
     }
 
-    audio.srcObject = stream;
+    audio.srcObject = event.streams[0];
 
     audio.volume = userVolumes[id] ?? 1;
     audio.muted = userMuted[id] ?? false;
@@ -258,266 +443,56 @@ function createRemoteAudio(id, stream) {
     });
 }
 
-/* ================= REMOTE VIDEO ================= */
-function createRemoteVideo(id, stream) {
+/* ================= REMOTE VIDEO / SCREEN ================= */
+function handleRemoteVideo(id, event) {
 
-    let box = document.getElementById("remote-stream-" + id);
+    let video = document.getElementById("video-" + id);
 
-    if (!box) {
+    if (!video) {
 
-        box = document.createElement("div");
-        box.id = "remote-stream-" + id;
-        box.className = "stream-card";
+        video = document.createElement("video");
 
-        const title = document.createElement("h3");
-        title.innerText = "User Stream";
-
-        const video = document.createElement("video");
         video.id = "video-" + id;
         video.autoplay = true;
         video.controls = true;
         video.playsInline = true;
+        video.style.width = "100%";
+        video.style.maxWidth = "700px";
+        video.style.margin = "12px";
+        video.style.borderRadius = "12px";
+        video.style.background = "#000";
 
-        box.appendChild(title);
-        box.appendChild(video);
+        const content = document.querySelector(".content") || document.body;
 
-        remoteStreams.appendChild(box);
+        const title = document.createElement("p");
+        title.id = "video-title-" + id;
+        title.innerText = "Screen stream from user";
+        title.style.margin = "12px";
+        title.style.color = "#b8beca";
+
+        content.appendChild(title);
+        content.appendChild(video);
     }
 
-    const video = document.getElementById("video-" + id);
-
-    video.srcObject = stream;
+    video.srcObject = event.streams[0];
 
     video.play().catch(() => {
-
-        console.log("Video autoplay blocked. Click the page once.");
-
-        document.body.addEventListener(
-            "click",
-            () => {
-                video.play();
-            },
-            { once: true }
-        );
-    });
-}
-
-/* ================= HIGH QUALITY VIDEO SETTINGS ================= */
-async function applyHighQualitySettings(sender) {
-
-    if (!sender || !sender.track) {
-        return;
-    }
-
-    if (sender.track.kind !== "video") {
-        return;
-    }
-
-    const params = sender.getParameters();
-
-    if (!params.encodings || params.encodings.length === 0) {
-        params.encodings = [{}];
-    }
-
-    params.degradationPreference = "maintain-framerate";
-
-    params.encodings[0].maxBitrate = 12000000;
-    params.encodings[0].maxFramerate = 60;
-    params.encodings[0].scaleResolutionDownBy = 1;
-
-    try {
-        await sender.setParameters(params);
-        console.log("VIDEO QUALITY SET:", sender.getParameters());
-    } catch (err) {
-        console.log("Could not set sender params:", err);
-    }
-}
-
-/* ================= ADD SCREEN TRACKS ================= */
-function addScreenTracksToPeer(id, peer) {
-
-    if (!screenStream) {
-        return;
-    }
-
-    if (!screenSenders[id]) {
-        screenSenders[id] = [];
-    }
-
-    if (screenSenders[id].length > 0) {
-        return;
-    }
-
-    screenStream.getTracks().forEach(track => {
-
-        const sender = peer.addTrack(track, screenStream);
-
-        screenSenders[id].push(sender);
-
-        applyHighQualitySettings(sender);
-    });
-}
-
-/* ================= RENEGOTIATE ================= */
-async function renegotiatePeer(id) {
-
-    const peer = peers[id];
-
-    if (!peer) {
-        return;
-    }
-
-    if (peer.signalingState !== "stable") {
-        console.log("Peer not stable, skip renegotiate:", id);
-        return;
-    }
-
-    try {
-
-        const offer = await peer.createOffer();
-
-        await peer.setLocalDescription(offer);
-
-        socket.emit("offer", {
-            target: id,
-            offer: offer
-        });
-
-    } catch (err) {
-
-        console.error("RENEGOTIATE ERROR:", err);
-    }
-}
-
-async function renegotiateAllPeers() {
-
-    const ids = Object.keys(peers);
-
-    for (const id of ids) {
-        await renegotiatePeer(id);
-    }
-}
-
-/* ================= START STREAM 1080P 60FPS ================= */
-streamBtn.onclick = async () => {
-
-    if (screenStream) {
-        alert("Stream already running");
-        return;
-    }
-
-    try {
-
-        screenStream = await navigator.mediaDevices.getDisplayMedia({
-            video: {
-                width: {
-                    ideal: 1920,
-                    max: 1920
-                },
-                height: {
-                    ideal: 1080,
-                    max: 1080
-                },
-                frameRate: {
-                    ideal: 60,
-                    max: 60
-                }
-            },
-            audio: true
-        });
-		
-		/* CHECK ACTUAL STREAM FPS */
-const videoTrack = screenStream.getVideoTracks()[0];
-
-if (videoTrack) {
-    console.log("STREAM SETTINGS:", videoTrack.getSettings());
-}
-		
-
-        screenStream.getVideoTracks().forEach(track => {
-            track.contentHint = "motion";
-
-            track.onended = () => {
-                stopScreenStream();
-            };
-        });
-
-        localPreview.srcObject = screenStream;
-        localStreamBox.classList.remove("hidden");
-
-        Object.keys(peers).forEach(id => {
-            addScreenTracksToPeer(id, peers[id]);
-        });
-
-        await renegotiateAllPeers();
-
-        streamBtn.innerText = "🖥️ Streaming";
-        status.innerText = "Streaming 1080p 60fps target";
-
-        console.log("SCREEN STREAM STARTED");
-
-    } catch (err) {
-
-        console.error("SCREEN STREAM ERROR:", err);
-
-        alert("Screen/game stream permission denied");
-    }
-};
-
-/* ================= STOP STREAM ================= */
-async function stopScreenStream() {
-
-    if (!screenStream) {
-        return;
-    }
-
-    const oldStream = screenStream;
-
-    screenStream = null;
-
-    oldStream.getTracks().forEach(track => {
-        track.onended = null;
-        track.stop();
+        console.log("Video autoplay blocked. Click page once.");
     });
 
-    localPreview.srcObject = null;
-    localStreamBox.classList.add("hidden");
+    event.track.onended = () => {
+        const oldVideo = document.getElementById("video-" + id);
+        const oldTitle = document.getElementById("video-title-" + id);
 
-    Object.keys(screenSenders).forEach(id => {
-
-        const peer = peers[id];
-
-        if (peer) {
-            screenSenders[id].forEach(sender => {
-                try {
-                    peer.removeTrack(sender);
-                } catch (err) {
-                    console.log("Remove track error:", err);
-                }
-            });
+        if (oldVideo) {
+            oldVideo.remove();
         }
 
-        screenSenders[id] = [];
-    });
-
-    await renegotiateAllPeers();
-
-    socket.emit("stream-stopped");
-
-    streamBtn.innerText = "🖥️ Start Stream";
-    status.innerText = "Stream stopped";
-
-    console.log("SCREEN STREAM STOPPED");
+        if (oldTitle) {
+            oldTitle.remove();
+        }
+    };
 }
-
-stopStreamBtn.onclick = () => {
-    stopScreenStream();
-};
-
-/* ================= STREAM STOPPED FROM REMOTE USER ================= */
-socket.on("stream-stopped", ({ sender }) => {
-    removeRemoteVideo(sender);
-});
 
 /* ================= USER JOINED ================= */
 socket.on("user-joined", async (user) => {
@@ -611,48 +586,10 @@ socket.on("ice", async ({ sender, candidate }) => {
     }
 });
 
-/* ================= CLEANUP REMOTE USER ================= */
-function removeRemoteUser(id) {
-
-    if (peers[id]) {
-        peers[id].close();
-        delete peers[id];
-    }
-
-    const audio = document.getElementById("audio-" + id);
-
-    if (audio) {
-        audio.remove();
-    }
-
-    removeRemoteVideo(id);
-
-    delete userVolumes[id];
-    delete userMuted[id];
-    delete screenSenders[id];
-}
-
-function removeRemoteVideo(id) {
-
-    const videoBox = document.getElementById("remote-stream-" + id);
-
-    if (videoBox) {
-        videoBox.remove();
-    }
-}
-
 /* ================= USER LIST WITH MUTE + VOLUME ================= */
 socket.on("user-list", (users) => {
 
     userList.innerHTML = "";
-
-    const activeIds = users.map(user => user.id);
-
-    Object.keys(peers).forEach(id => {
-        if (!activeIds.includes(id)) {
-            removeRemoteUser(id);
-        }
-    });
 
     users.forEach((u) => {
 
