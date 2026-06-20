@@ -303,7 +303,7 @@ function createRemoteVideo(id, stream) {
 }
 
 /* ================= HIGH QUALITY VIDEO SETTINGS ================= */
-function applyHighQualitySettings(sender) {
+async function applyHighQualitySettings(sender) {
 
     if (!sender || !sender.track) {
         return;
@@ -319,12 +319,18 @@ function applyHighQualitySettings(sender) {
         params.encodings = [{}];
     }
 
-    params.encodings[0].maxBitrate = 8000000;
-    params.encodings[0].maxFramerate = 60;
+    params.degradationPreference = "maintain-framerate";
 
-    sender.setParameters(params).catch(err => {
-        console.log("Could not set video quality:", err);
-    });
+    params.encodings[0].maxBitrate = 12000000;
+    params.encodings[0].maxFramerate = 60;
+    params.encodings[0].scaleResolutionDownBy = 1;
+
+    try {
+        await sender.setParameters(params);
+        console.log("VIDEO QUALITY SET:", sender.getParameters());
+    } catch (err) {
+        console.log("Could not set sender params:", err);
+    }
 }
 
 /* ================= ADD SCREEN TRACKS ================= */
@@ -419,6 +425,14 @@ streamBtn.onclick = async () => {
             },
             audio: true
         });
+		
+		/* CHECK ACTUAL STREAM FPS */
+const videoTrack = screenStream.getVideoTracks()[0];
+
+if (videoTrack) {
+    console.log("STREAM SETTINGS:", videoTrack.getSettings());
+}
+		
 
         screenStream.getVideoTracks().forEach(track => {
             track.contentHint = "motion";
