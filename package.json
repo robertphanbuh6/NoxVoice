@@ -9,10 +9,10 @@
     "dist": "electron-builder"
   },
   "dependencies": {
-    "bcryptjs": "^3.0.3",
+    "bcryptjs": "^2.4.3",
     "electron-updater": "^6.3.9",
     "express": "^4.18.2",
-    "express-session": "^1.19.0",
+    "express-session": "^1.18.1",
     "socket.io": "^4.7.5"
   },
   "devDependencies": {
@@ -22,8 +22,18 @@
   "build": {
     "appId": "com.noxvoice.app",
     "productName": "NoxVoice",
+    "directories": {
+      "buildResources": "build"
+    },
     "win": {
-      "target": "nsis"
+      "target": "nsis",
+      "icon": "build/nox.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true,
+      "createStartMenuShortcut": true
     }
   }
 }

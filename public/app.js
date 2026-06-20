@@ -1,4 +1,4 @@
-console.log("NOXVOICE APP LOADED - VOICE + SCREEN STREAM + VOLUME FIXED");
+console.log("NOXVOICE APP LOADED - MIC + STREAM AUDIO ENABLED");
 
 const socket = io();
 
@@ -19,8 +19,8 @@ const streamBtn =
     document.getElementById("shareBtn");
 
 /* ================= STATE ================= */
-let localStream = null;       // microphone only
-let screenStream = null;      // screen only
+let localStream = null;       // microphone voice only
+let screenStream = null;      // screen video + stream audio
 let screenTrack = null;
 
 let micReady = false;
@@ -93,7 +93,6 @@ socket.on("connect", () => {
 
 /* ================= ENABLE MIC ================= */
 voiceBtn.onclick = async () => {
-
     try {
         localStream = await navigator.mediaDevices.getUserMedia({
             audio: {
@@ -122,7 +121,6 @@ voiceBtn.onclick = async () => {
 
 /* ================= SELF MUTE BUTTON ================= */
 muteBtn.onclick = () => {
-
     if (!localStream) {
         alert("Enable mic first");
         return;
@@ -156,7 +154,6 @@ if (logoutBtn) {
 
 /* ================= JOIN ROOM ================= */
 joinBtn.onclick = () => {
-
     const room = roomCode.value.trim();
 
     if (!room) {
@@ -178,13 +175,11 @@ joinBtn.onclick = () => {
 
 /* ================= TRACK HELPERS ================= */
 function addMicTracksToPeer(peer) {
-
     if (!localStream) {
         return;
     }
 
     localStream.getAudioTracks().forEach((track) => {
-
         const alreadyAdded = peer.getSenders().some(
             sender => sender.track === track
         );
@@ -195,34 +190,41 @@ function addMicTracksToPeer(peer) {
     });
 }
 
-function addScreenTrackToPeer(peer) {
-
-    if (!screenStream || !screenTrack) {
+function addScreenTracksToPeer(peer) {
+    if (!screenStream) {
         return;
     }
 
-    const alreadyAdded = peer.getSenders().some(
-        sender => sender.track === screenTrack
-    );
+    screenStream.getTracks().forEach((track) => {
+        const alreadyAdded = peer.getSenders().some(
+            sender => sender.track === track
+        );
 
-    if (!alreadyAdded) {
-        peer.addTrack(screenTrack, screenStream);
-    }
+        if (!alreadyAdded) {
+            peer.addTrack(track, screenStream);
+        }
+    });
 }
 
-function removeScreenTrackFromPeer(peer) {
-
+function removeScreenTracksFromPeer(peer) {
     const senders = peer.getSenders();
 
     senders.forEach((sender) => {
         if (sender.track && sender.track.kind === "video") {
             peer.removeTrack(sender);
         }
+
+        if (sender.track && sender.track.kind === "audio" && screenStream) {
+            const isScreenAudio = screenStream.getAudioTracks().includes(sender.track);
+
+            if (isScreenAudio) {
+                peer.removeTrack(sender);
+            }
+        }
     });
 }
 
 async function renegotiatePeer(targetId) {
-
     const peer = peers[targetId];
 
     if (!peer) {
@@ -246,7 +248,6 @@ async function renegotiatePeer(targetId) {
 
 /* ================= STREAM GRID ================= */
 function getStreamsGrid() {
-
     let grid = document.getElementById("streamsGrid");
 
     if (!grid) {
@@ -262,7 +263,6 @@ function getStreamsGrid() {
 
 /* ================= LOCAL SCREEN PREVIEW ================= */
 function showLocalScreenPreview(stream) {
-
     const grid = getStreamsGrid();
 
     let card = document.getElementById("stream-card-local");
@@ -279,7 +279,7 @@ function showLocalScreenPreview(stream) {
         const video = document.createElement("video");
         video.id = "video-local";
         video.autoplay = true;
-        video.muted = true;
+        video.muted = true; // Prevent echo from your own stream audio
         video.controls = true;
         video.playsInline = true;
 
@@ -298,7 +298,6 @@ function showLocalScreenPreview(stream) {
 }
 
 function removeLocalScreenPreview() {
-
     const card = document.getElementById("stream-card-local");
 
     if (card) {
@@ -308,9 +307,7 @@ function removeLocalScreenPreview() {
 
 /* ================= START / STOP SCREEN STREAM ================= */
 if (streamBtn) {
-
     streamBtn.onclick = async () => {
-
         if (!isStreaming) {
             await startScreenStream();
         } else {
@@ -320,11 +317,18 @@ if (streamBtn) {
 }
 
 async function startScreenStream() {
-
     try {
+        /*
+            This captures:
+            - screen video
+            - stream/system audio
+
+            It does NOT replace localStream.
+            Your microphone remains separate.
+        */
         screenStream = await navigator.mediaDevices.getDisplayMedia({
             video: true,
-            audio: false
+            audio: true
         });
 
         screenTrack = screenStream.getVideoTracks()[0];
@@ -340,14 +344,14 @@ async function startScreenStream() {
             streamBtn.innerText = "🛑 Stop Stream";
         }
 
-        status.innerText = "Screen streaming 🖥️";
+        status.innerText = "Screen streaming with audio 🖥️🔊";
 
         showLocalScreenPreview(screenStream);
 
         Object.keys(peers).forEach(async (id) => {
             const peer = peers[id];
 
-            addScreenTrackToPeer(peer);
+            addScreenTracksToPeer(peer);
 
             await renegotiatePeer(id);
         });
@@ -356,7 +360,7 @@ async function startScreenStream() {
             await stopScreenStream();
         };
 
-        console.log("SCREEN STREAM STARTED");
+        console.log("SCREEN STREAM WITH AUDIO STARTED");
 
     } catch (err) {
         console.error("SCREEN STREAM ERROR:", err);
@@ -365,12 +369,19 @@ async function startScreenStream() {
 }
 
 async function stopScreenStream() {
-
     if (!isStreaming) {
         return;
     }
 
     isStreaming = false;
+
+    Object.keys(peers).forEach(async (id) => {
+        const peer = peers[id];
+
+        removeScreenTracksFromPeer(peer);
+
+        await renegotiatePeer(id);
+    });
 
     if (screenStream) {
         screenStream.getTracks().forEach(track => {
@@ -389,20 +400,11 @@ async function stopScreenStream() {
 
     status.innerText = "Screen stream stopped";
 
-    Object.keys(peers).forEach(async (id) => {
-        const peer = peers[id];
-
-        removeScreenTrackFromPeer(peer);
-
-        await renegotiatePeer(id);
-    });
-
     console.log("SCREEN STREAM STOPPED");
 }
 
 /* ================= CREATE PEER ================= */
 function createPeer(id) {
-
     if (peers[id]) {
         return peers[id];
     }
@@ -414,7 +416,6 @@ function createPeer(id) {
     console.log("CREATING PEER:", id);
 
     peer.onicecandidate = (event) => {
-
         if (event.candidate) {
             socket.emit("ice", {
                 target: id,
@@ -431,7 +432,6 @@ function createPeer(id) {
     };
 
     peer.ontrack = (event) => {
-
         console.log("TRACK RECEIVED FROM:", id, event.track.kind);
 
         if (event.track.kind === "audio") {
@@ -445,8 +445,8 @@ function createPeer(id) {
 
     addMicTracksToPeer(peer);
 
-    if (isStreaming && screenTrack) {
-        addScreenTrackToPeer(peer);
+    if (isStreaming && screenStream) {
+        addScreenTracksToPeer(peer);
     }
 
     return peer;
@@ -454,13 +454,15 @@ function createPeer(id) {
 
 /* ================= REMOTE AUDIO ================= */
 function handleRemoteAudio(id, event) {
+    const audioId = "audio-" + id + "-" + event.track.id;
 
-    let audio = document.getElementById("audio-" + id);
+    let audio = document.getElementById(audioId);
 
     if (!audio) {
         audio = document.createElement("audio");
 
-        audio.id = "audio-" + id;
+        audio.id = audioId;
+        audio.className = "remote-audio remote-audio-" + id;
         audio.autoplay = true;
         audio.controls = true;
         audio.playsInline = true;
@@ -470,13 +472,13 @@ function handleRemoteAudio(id, event) {
         document.body.appendChild(audio);
     }
 
-    audio.srcObject = event.streams[0];
+    const audioOnlyStream = new MediaStream([event.track]);
 
-    audio.volume = userVolumes[id] ?? 1;
-    audio.muted = userMuted[id] ?? false;
+    audio.srcObject = audioOnlyStream;
+
+    applyUserAudioSettings(id);
 
     audio.play().catch(() => {
-
         console.log("Audio autoplay blocked. Click the page once.");
 
         document.body.addEventListener(
@@ -487,11 +489,27 @@ function handleRemoteAudio(id, event) {
             { once: true }
         );
     });
+
+    event.track.onended = () => {
+        const oldAudio = document.getElementById(audioId);
+
+        if (oldAudio) {
+            oldAudio.remove();
+        }
+    };
+}
+
+function applyUserAudioSettings(id) {
+    const audios = document.querySelectorAll(".remote-audio-" + id);
+
+    audios.forEach((audio) => {
+        audio.volume = userVolumes[id] ?? 1;
+        audio.muted = userMuted[id] ?? false;
+    });
 }
 
 /* ================= REMOTE VIDEO ================= */
 function handleRemoteVideo(id, event) {
-
     const grid = getStreamsGrid();
 
     let card = document.getElementById("stream-card-" + id);
@@ -510,6 +528,7 @@ function handleRemoteVideo(id, event) {
         video.autoplay = true;
         video.controls = true;
         video.playsInline = true;
+        video.muted = true; // Audio is handled separately by audio tracks
 
         card.appendChild(title);
         card.appendChild(video);
@@ -518,7 +537,9 @@ function handleRemoteVideo(id, event) {
 
     const video = document.getElementById("video-" + id);
 
-    video.srcObject = event.streams[0];
+    const videoOnlyStream = new MediaStream([event.track]);
+
+    video.srcObject = videoOnlyStream;
 
     video.play().catch(() => {
         console.log("Remote video autoplay blocked");
@@ -535,7 +556,6 @@ function handleRemoteVideo(id, event) {
 
 /* ================= USER JOINED ================= */
 socket.on("user-joined", async (user) => {
-
     if (!micReady) {
         return;
     }
@@ -563,7 +583,6 @@ socket.on("user-joined", async (user) => {
 
 /* ================= OFFER RECEIVED ================= */
 socket.on("offer", async ({ sender, offer }) => {
-
     const peer = createPeer(sender);
 
     try {
@@ -585,7 +604,6 @@ socket.on("offer", async ({ sender, offer }) => {
 
 /* ================= ANSWER RECEIVED ================= */
 socket.on("answer", async ({ sender, answer }) => {
-
     const peer = peers[sender];
 
     if (!peer) {
@@ -602,7 +620,6 @@ socket.on("answer", async ({ sender, answer }) => {
 
 /* ================= ICE RECEIVED ================= */
 socket.on("ice", async ({ sender, candidate }) => {
-
     const peer = peers[sender];
 
     if (!peer) {
@@ -619,11 +636,9 @@ socket.on("ice", async ({ sender, candidate }) => {
 
 /* ================= USER LIST WITH MUTE + VOLUME ================= */
 socket.on("user-list", (users) => {
-
     userList.innerHTML = "";
 
     users.forEach((u) => {
-
         const li = document.createElement("li");
         li.className = "user-item";
 
@@ -654,26 +669,18 @@ socket.on("user-list", (users) => {
         volumeSlider.title = "User volume";
 
         if (u.id === socket.id) {
-
             userMuteBtn.disabled = true;
             volumeSlider.disabled = true;
-
         } else {
-
             if (userMuted[u.id]) {
                 userMuteBtn.textContent = "🔊";
                 userMuteBtn.classList.add("user-muted");
             }
 
             userMuteBtn.onclick = () => {
-
-                const audio = document.getElementById("audio-" + u.id);
-
                 userMuted[u.id] = !userMuted[u.id];
 
-                if (audio) {
-                    audio.muted = userMuted[u.id];
-                }
+                applyUserAudioSettings(u.id);
 
                 if (userMuted[u.id]) {
                     userMuteBtn.textContent = "🔊";
@@ -687,14 +694,9 @@ socket.on("user-list", (users) => {
             };
 
             volumeSlider.oninput = () => {
-
-                const audio = document.getElementById("audio-" + u.id);
-
                 userVolumes[u.id] = Number(volumeSlider.value);
 
-                if (audio) {
-                    audio.volume = userVolumes[u.id];
-                }
+                applyUserAudioSettings(u.id);
             };
         }
 
