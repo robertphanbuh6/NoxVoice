@@ -271,3 +271,55 @@ audio {
     color: #b8beca;
     font-size: 14px;
 }
+#streamBtn {
+    background: #5865f2;
+}
+
+#streamBtn:hover {
+    background: #4752c4;
+}
+
+#stopStreamBtn {
+    background: #da373c;
+}
+
+#stopStreamBtn:hover {
+    background: #b92f33;
+}
+
+.hidden {
+    display: none !important;
+}
+
+.stream-title {
+    margin-top: 24px;
+    margin-bottom: 12px;
+}
+
+.stream-card {
+    background: #111318;
+    border: 1px solid #343846;
+    border-radius: 14px;
+    padding: 14px;
+    margin-top: 16px;
+    box-shadow: 0 12px 30px rgba(0, 0, 0, 0.35);
+}
+
+.stream-card h3 {
+    margin-bottom: 10px;
+    color: #ffffff;
+}
+
+.stream-card video {
+    width: 100%;
+    max-height: 600px;
+    background: #000000;
+    border-radius: 12px;
+    outline: none;
+}
+
+.remote-streams {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(320px, 1fr));
+    gap: 16px;
+}

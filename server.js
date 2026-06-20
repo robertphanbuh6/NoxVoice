@@ -318,6 +318,16 @@ io.on("connection", (socket) => {
             candidate: data.candidate
         });
     });
+	
+	/* Stream */
+	socket.on("stream-stopped", () => {
+    if (socket.room) {
+        socket.to(socket.room).emit("stream-stopped", {
+            sender: socket.id
+        });
+    }
+});
+
 
     /* DISCONNECT */
     socket.on("disconnect", () => {
