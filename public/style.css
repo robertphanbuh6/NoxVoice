@@ -225,3 +225,49 @@ audio {
         padding: 16px;
     }
 }
+.login-page {
+    min-height: 100vh;
+    background: linear-gradient(135deg, #0f1117, #1e1f2f);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.login-card {
+    width: 360px;
+    background: #191b22;
+    padding: 28px;
+    border-radius: 18px;
+    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.45);
+    text-align: center;
+}
+
+.login-card h1 {
+    margin-bottom: 8px;
+}
+
+.login-subtitle {
+    color: #b8beca;
+    margin-bottom: 18px;
+}
+
+#loginStatus {
+    margin-top: 12px;
+    color: #b8beca;
+}
+
+#logoutBtn {
+    background: #444b5f;
+}
+
+#logoutBtn:hover {
+    background: #363b4b;
+}
+
+#accountName {
+    background: #111318;
+    padding: 10px;
+    border-radius: 10px;
+    color: #b8beca;
+    font-size: 14px;
+}

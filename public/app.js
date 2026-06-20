@@ -1,21 +1,29 @@
-console.log("NOXVOICE APP LOADED");
+console.log("NOXVOICE APP LOADED - LOGIN + ROOM SYSTEM");
 
 const socket = io();
 
+/* ================= UI ELEMENTS ================= */
 const username = document.getElementById("username");
 const roomCode = document.getElementById("roomCode");
 const joinBtn = document.getElementById("joinBtn");
 const voiceBtn = document.getElementById("voiceBtn");
 const muteBtn = document.getElementById("muteBtn");
+const logoutBtn = document.getElementById("logoutBtn");
 const status = document.getElementById("status");
 const userList = document.getElementById("userList");
+const accountName = document.getElementById("accountName");
 
+/* ================= STATE ================= */
 let localStream = null;
 let micReady = false;
 let muted = false;
+let loggedInUsername = null;
 
 const peers = {};
+const userVolumes = {};
+const userMuted = {};
 
+/* ================= ICE SERVERS ================= */
 const config = {
     iceServers: [
         {
@@ -27,10 +35,46 @@ const config = {
     ]
 };
 
+/* ================= CHECK LOGIN ================= */
+async function checkLogin() {
+    try {
+        const res = await fetch("/api/me");
+        const data = await res.json();
+
+        if (!data.loggedIn) {
+            window.location.href = "/login.html";
+            return;
+        }
+
+        loggedInUsername = data.username;
+
+        username.value = data.username;
+        username.readOnly = true;
+
+        accountName.innerText = "Signed in as: " + data.username;
+
+        console.log("LOGGED IN AS:", data.username);
+
+    } catch (err) {
+        console.error("LOGIN CHECK ERROR:", err);
+        window.location.href = "/login.html";
+    }
+}
+
+checkLogin();
+
+/* ================= SOCKET CONNECT ================= */
 socket.on("connect", () => {
     console.log("CONNECTED:", socket.id);
 });
 
+/* ================= JOIN ERROR ================= */
+socket.on("join-error", (data) => {
+    alert(data.message);
+    status.innerText = data.message;
+});
+
+/* ================= ENABLE MIC ================= */
 voiceBtn.onclick = async () => {
 
     try {
@@ -53,6 +97,7 @@ voiceBtn.onclick = async () => {
     }
 };
 
+/* ================= SELF MUTE BUTTON ================= */
 muteBtn.onclick = () => {
 
     if (!localStream) {
@@ -75,13 +120,23 @@ muteBtn.onclick = () => {
     }
 };
 
+/* ================= LOGOUT ================= */
+logoutBtn.onclick = async () => {
+
+    await fetch("/api/logout", {
+        method: "POST"
+    });
+
+    window.location.href = "/login.html";
+};
+
+/* ================= JOIN ROOM ================= */
 joinBtn.onclick = () => {
 
-    const user = username.value.trim();
     const room = roomCode.value.trim();
 
-    if (!user || !room) {
-        alert("Enter username and room code");
+    if (!room) {
+        alert("Enter room code");
         return;
     }
 
@@ -91,13 +146,13 @@ joinBtn.onclick = () => {
     }
 
     socket.emit("join-room", {
-        room: room,
-        username: user
+        room: room
     });
 
-    status.innerText = "Joined room: " + room;
+    status.innerText = "Joining room: " + room;
 };
 
+/* ================= CREATE PEER ================= */
 function createPeer(id) {
 
     if (peers[id]) {
@@ -142,12 +197,16 @@ function createPeer(id) {
             audio.autoplay = true;
             audio.controls = true;
             audio.playsInline = true;
-            audio.volume = 1;
+            audio.volume = userVolumes[id] ?? 1;
+            audio.muted = userMuted[id] ?? false;
 
             document.body.appendChild(audio);
         }
 
         audio.srcObject = event.streams[0];
+
+        audio.volume = userVolumes[id] ?? 1;
+        audio.muted = userMuted[id] ?? false;
 
         audio.play().catch(() => {
 
@@ -173,6 +232,7 @@ function createPeer(id) {
     return peer;
 }
 
+/* ================= USER JOINED ================= */
 socket.on("user-joined", async (user) => {
 
     if (!micReady) {
@@ -202,6 +262,7 @@ socket.on("user-joined", async (user) => {
     }
 });
 
+/* ================= OFFER RECEIVED ================= */
 socket.on("offer", async ({ sender, offer }) => {
 
     const peer = createPeer(sender);
@@ -225,6 +286,7 @@ socket.on("offer", async ({ sender, offer }) => {
     }
 });
 
+/* ================= ANSWER RECEIVED ================= */
 socket.on("answer", async ({ sender, answer }) => {
 
     const peer = peers[sender];
@@ -243,6 +305,7 @@ socket.on("answer", async ({ sender, answer }) => {
     }
 });
 
+/* ================= ICE RECEIVED ================= */
 socket.on("ice", async ({ sender, candidate }) => {
 
     const peer = peers[sender];
@@ -261,15 +324,44 @@ socket.on("ice", async ({ sender, candidate }) => {
     }
 });
 
+/* ================= CLEANUP REMOTE USER ================= */
+function removeRemoteUser(id) {
+
+    if (peers[id]) {
+        peers[id].close();
+        delete peers[id];
+    }
+
+    const audio = document.getElementById("audio-" + id);
+
+    if (audio) {
+        audio.remove();
+    }
+
+    delete userVolumes[id];
+    delete userMuted[id];
+}
+
+/* ================= USER LIST WITH MUTE + VOLUME ================= */
 socket.on("user-list", (users) => {
 
     userList.innerHTML = "";
 
+    const activeIds = users.map(user => user.id);
+
+    Object.keys(peers).forEach(id => {
+        if (!activeIds.includes(id)) {
+            removeRemoteUser(id);
+        }
+    });
+
     users.forEach((u) => {
 
         const li = document.createElement("li");
+        li.className = "user-item";
 
         const name = document.createElement("span");
+        name.className = "user-name";
 
         if (u.id === socket.id) {
             name.textContent = u.username + " (You)";
@@ -277,29 +369,46 @@ socket.on("user-list", (users) => {
             name.textContent = u.username;
         }
 
-        const userMuteBtn = document.createElement("button");
+        const controls = document.createElement("div");
+        controls.className = "user-controls";
 
+        const userMuteBtn = document.createElement("button");
+        userMuteBtn.className = "user-mute-btn";
         userMuteBtn.textContent = "🔇";
         userMuteBtn.title = "Mute this user";
+
+        const volumeSlider = document.createElement("input");
+        volumeSlider.className = "user-volume-slider";
+        volumeSlider.type = "range";
+        volumeSlider.min = "0";
+        volumeSlider.max = "1";
+        volumeSlider.step = "0.01";
+        volumeSlider.value = userVolumes[u.id] ?? 1;
+        volumeSlider.title = "User volume";
 
         if (u.id === socket.id) {
 
             userMuteBtn.disabled = true;
+            volumeSlider.disabled = true;
 
         } else {
+
+            if (userMuted[u.id]) {
+                userMuteBtn.textContent = "🔊";
+                userMuteBtn.classList.add("user-muted");
+            }
 
             userMuteBtn.onclick = () => {
 
                 const audio = document.getElementById("audio-" + u.id);
 
-                if (!audio) {
-                    alert("Audio not connected yet");
-                    return;
+                userMuted[u.id] = !userMuted[u.id];
+
+                if (audio) {
+                    audio.muted = userMuted[u.id];
                 }
 
-                audio.muted = !audio.muted;
-
-                if (audio.muted) {
+                if (userMuted[u.id]) {
                     userMuteBtn.textContent = "🔊";
                     userMuteBtn.title = "Unmute this user";
                     userMuteBtn.classList.add("user-muted");
@@ -309,10 +418,24 @@ socket.on("user-list", (users) => {
                     userMuteBtn.classList.remove("user-muted");
                 }
             };
+
+            volumeSlider.oninput = () => {
+
+                const audio = document.getElementById("audio-" + u.id);
+
+                userVolumes[u.id] = Number(volumeSlider.value);
+
+                if (audio) {
+                    audio.volume = userVolumes[u.id];
+                }
+            };
         }
 
+        controls.appendChild(userMuteBtn);
+        controls.appendChild(volumeSlider);
+
         li.appendChild(name);
-        li.appendChild(userMuteBtn);
+        li.appendChild(controls);
 
         userList.appendChild(li);
     });

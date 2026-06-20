@@ -2,20 +2,22 @@
   "name": "noxvoice",
   "version": "1.0.0",
   "description": "NoxVoice voice chat app",
-  "main": "server.js",
+  "main": "main.js",
   "scripts": {
     "start": "node server.js",
     "electron": "electron .",
     "dist": "electron-builder"
   },
   "dependencies": {
+    "bcryptjs": "^3.0.3",
+    "electron-updater": "^6.3.9",
     "express": "^4.18.2",
-    "socket.io": "^4.7.5",
-    "electron-updater": "^6.3.9"
+    "express-session": "^1.19.0",
+    "socket.io": "^4.7.5"
   },
   "devDependencies": {
-    "electron": "^28.0.0",
-    "electron-builder": "^24.13.3"
+    "electron": "^42.4.1",
+    "electron-builder": "^26.15.3"
   },
   "build": {
     "appId": "com.noxvoice.app",
