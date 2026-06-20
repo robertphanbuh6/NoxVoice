@@ -1,29 +1,45 @@
-<<<<<<< HEAD
 <!DOCTYPE html>
-<html>
+<html lang="en">
+
 <head>
-    <title>Voice Chat</title>
+    <meta charset="UTF-8">
+    <title>NoxVoice</title>
     <link rel="stylesheet" href="style.css">
 </head>
 
 <body>
 
-<div class="container">
+<div class="app">
 
-    <h2>VOICE CHAT</h2>
+    <div class="sidebar">
 
-    <input id="username" placeholder="Username">
-    <input id="roomCode" placeholder="Room Code">
+        <div class="title">🎧 NoxVoice</div>
 
-    <div class="buttons">
-        <button id="voiceBtn">Enable Mic</button>
+        <input id="username" placeholder="Username">
+        <input id="roomCode" placeholder="Room Code">
+
+        <button id="voiceBtn">🎤 Enable Mic</button>
         <button id="joinBtn">Join Room</button>
-        <button id="muteBtn">Mute</button>
+        <button id="muteBtn">🔇 Mute</button>
+
+        <p id="status">Offline</p>
+
+        <div class="divider"></div>
+
+        <h3>Connected Users</h3>
+        <ul id="userList"></ul>
+
     </div>
 
-    <p id="status">Idle</p>
+    <div class="main">
+        <div class="header">
+            Live Voice Room
+        </div>
 
-    <ul id="userList"></ul>
+        <div class="content">
+            <p>Enable mic first, then join a room.</p>
+        </div>
+    </div>
 
 </div>
 
@@ -31,38 +47,4 @@
 <script src="app.js"></script>
 
 </body>
-=======
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Voice Chat</title>
-    <link rel="stylesheet" href="style.css">
-</head>
-
-<body>
-
-<div class="container">
-
-    <h2>VOICE CHAT</h2>
-
-    <input id="username" placeholder="Username">
-    <input id="roomCode" placeholder="Room Code">
-
-    <div class="buttons">
-        <button id="voiceBtn">Enable Mic</button>
-        <button id="joinBtn">Join Room</button>
-        <button id="muteBtn">Mute</button>
-    </div>
-
-    <p id="status">Idle</p>
-
-    <ul id="userList"></ul>
-
-</div>
-
-<script src="/socket.io/socket.io.js"></script>
-<script src="app.js"></script>
-
-</body>
->>>>>>> b85b587b2eed11a3a5fcd7b0049ad68fba49fb7d
 </html>

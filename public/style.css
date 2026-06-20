@@ -1,4 +1,3 @@
-<<<<<<< HEAD
 * {
     margin: 0;
     padding: 0;
@@ -12,25 +11,12 @@ body {
     color: #ffffff;
 }
 
-/* MAIN APP LAYOUT */
 .app {
     display: flex;
     width: 100%;
     min-height: 100vh;
 }
 
-/* FALLBACK IF YOU ARE USING .container IN HTML */
-.container {
-    width: 420px;
-    max-width: 95%;
-    margin: 60px auto;
-    background: #1f2128;
-    padding: 24px;
-    border-radius: 18px;
-    box-shadow: 0 20px 50px rgba(0, 0, 0, 0.45);
-}
-
-/* SIDEBAR */
 .sidebar {
     width: 300px;
     min-height: 100vh;
@@ -42,7 +28,6 @@ body {
     gap: 10px;
 }
 
-/* MAIN CONTENT */
 .main {
     flex: 1;
     background: #232630;
@@ -65,7 +50,6 @@ body {
     color: #b8beca;
 }
 
-/* TITLES */
 .title,
 h1,
 h2,
@@ -78,10 +62,8 @@ h4 {
 .title {
     font-size: 22px;
     font-weight: bold;
-    color: #ffffff;
 }
 
-/* INPUTS */
 input {
     width: 100%;
     padding: 12px 14px;
@@ -103,7 +85,6 @@ input:focus {
     box-shadow: 0 0 0 3px rgba(88, 101, 242, 0.2);
 }
 
-/* BUTTONS */
 button {
     width: 100%;
     padding: 12px 14px;
@@ -127,7 +108,6 @@ button:active {
     transform: scale(0.98);
 }
 
-/* MAIN ACTION BUTTONS */
 #joinBtn {
     background: #3ba55d;
 }
@@ -148,7 +128,6 @@ button:active {
     background: #b92f33;
 }
 
-/* STATUS */
 #status {
     margin: 12px 0;
     padding: 10px;
@@ -159,14 +138,12 @@ button:active {
     text-align: center;
 }
 
-/* DIVIDER */
 .divider {
     height: 1px;
     background: #343846;
     margin: 12px 0;
 }
 
-/* USER LIST */
 #userList {
     list-style: none;
     margin-top: 10px;
@@ -174,20 +151,19 @@ button:active {
 }
 
 #userList li {
-    display: flex !important;
-    justify-content: space-between !important;
-    align-items: center !important;
-    gap: 10px !important;
-    padding: 10px 12px !important;
-    margin: 8px 0 !important;
-    background: #111318 !important;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 12px;
+    margin: 8px 0;
+    background: #111318;
     border: 1px solid #2f3340;
-    border-radius: 12px !important;
+    border-radius: 12px;
     color: #ffffff;
     font-size: 14px;
 }
 
-/* USER NAME */
 #userList li span {
     flex: 1;
     overflow: hidden;
@@ -195,30 +171,31 @@ button:active {
     text-overflow: ellipsis;
 }
 
-/* MUTE BUTTON NEXT TO USERS */
 #userList li button {
-    width: 44px !important;
-    height: 34px !important;
+    width: 44px;
     min-width: 44px;
-    padding: 0 !important;
-    margin: 0 !important;
-    border-radius: 8px !important;
-    background: #5865f2 !important;
-    color: white !important;
+    height: 34px;
+    padding: 0;
+    margin: 0;
+    border-radius: 8px;
+    background: #5865f2;
+    color: white;
     font-size: 16px;
 }
 
 #userList li button:hover {
-    background: #4752c4 !important;
+    background: #4752c4;
 }
 
-/* DISABLED SELF USER BUTTON */
+#userList li button.user-muted {
+    background: #da373c;
+}
+
 #userList li button:disabled {
-    opacity: 0.4 !important;
-    cursor: not-allowed !important;
+    opacity: 0.4;
+    cursor: not-allowed;
 }
 
-/* AUDIO ELEMENTS CREATED BY JS */
 audio {
     width: 260px;
     max-width: 90%;
@@ -227,13 +204,6 @@ audio {
     background: #111318;
 }
 
-/* VOLUME SLIDER IF YOU ADD ONE LATER */
-.volume-slider,
-input[type="range"] {
-    accent-color: #5865f2;
-}
-
-/* MOBILE RESPONSIVE */
 @media (max-width: 768px) {
     .app {
         flex-direction: column;
@@ -250,58 +220,8 @@ input[type="range"] {
         min-height: auto;
     }
 
-    .container {
-        margin: 20px auto;
-    }
-
     .header {
         height: auto;
         padding: 16px;
     }
-=======
-body {
-    margin: 0;
-    font-family: Arial;
-    background: #0f0f1a;
-    color: white;
-    display: flex;
-    justify-content: center;
-    align-items: center;
-    height: 100vh;
-}
-
-.container {
-    background: #1a1a2e;
-    padding: 20px;
-    border-radius: 10px;
-    width: 300px;
-    text-align: center;
-}
-
-input {
-    width: 90%;
-    margin: 5px;
-    padding: 10px;
-    border: none;
-    border-radius: 5px;
-}
-
-button {
-    margin: 5px;
-    padding: 10px;
-    border: none;
-    border-radius: 5px;
-    cursor: pointer;
-    background: #4e54c8;
-    color: white;
-}
-
-button:hover {
-    background: #6c70ff;
-}
-
-#userList {
-    list-style: none;
-    padding: 0;
->>>>>>> b85b587b2eed11a3a5fcd7b0049ad68fba49fb7d
 }
