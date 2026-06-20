@@ -1,4 +1,4 @@
-console.log("NOXVOICE APP LOADED - VOICE + SCREEN STREAM FIXED");
+console.log("NOXVOICE APP LOADED - VOICE + SCREEN STREAM + VOLUME FIXED");
 
 const socket = io();
 
@@ -13,19 +13,14 @@ const status = document.getElementById("status");
 const userList = document.getElementById("userList");
 const accountName = document.getElementById("accountName");
 
-/*
-    Add this button in HTML if you have not added it yet:
-
-    <button id="streamBtn">🖥️ Start Stream</button>
-*/
 const streamBtn =
     document.getElementById("streamBtn") ||
     document.getElementById("screenBtn") ||
     document.getElementById("shareBtn");
 
 /* ================= STATE ================= */
-let localStream = null;      // microphone stream ONLY
-let screenStream = null;     // screen stream ONLY
+let localStream = null;       // microphone only
+let screenStream = null;      // screen only
 let screenTrack = null;
 
 let micReady = false;
@@ -100,7 +95,6 @@ socket.on("connect", () => {
 voiceBtn.onclick = async () => {
 
     try {
-
         localStream = await navigator.mediaDevices.getUserMedia({
             audio: {
                 echoCancellation: true,
@@ -121,7 +115,6 @@ voiceBtn.onclick = async () => {
         });
 
     } catch (err) {
-
         console.error("MIC ERROR:", err);
         alert("Microphone permission denied");
     }
@@ -237,7 +230,6 @@ async function renegotiatePeer(targetId) {
     }
 
     try {
-
         const offer = await peer.createOffer();
 
         await peer.setLocalDescription(offer);
@@ -252,7 +244,69 @@ async function renegotiatePeer(targetId) {
     }
 }
 
-/* ================= SCREEN STREAM BUTTON ================= */
+/* ================= STREAM GRID ================= */
+function getStreamsGrid() {
+
+    let grid = document.getElementById("streamsGrid");
+
+    if (!grid) {
+        grid = document.createElement("div");
+        grid.id = "streamsGrid";
+
+        const content = document.querySelector(".content") || document.body;
+        content.appendChild(grid);
+    }
+
+    return grid;
+}
+
+/* ================= LOCAL SCREEN PREVIEW ================= */
+function showLocalScreenPreview(stream) {
+
+    const grid = getStreamsGrid();
+
+    let card = document.getElementById("stream-card-local");
+
+    if (!card) {
+        card = document.createElement("div");
+        card.id = "stream-card-local";
+        card.className = "stream-card";
+
+        const title = document.createElement("div");
+        title.className = "stream-card-title";
+        title.innerText = "Your screen stream";
+
+        const video = document.createElement("video");
+        video.id = "video-local";
+        video.autoplay = true;
+        video.muted = true;
+        video.controls = true;
+        video.playsInline = true;
+
+        card.appendChild(title);
+        card.appendChild(video);
+        grid.appendChild(card);
+    }
+
+    const video = document.getElementById("video-local");
+
+    video.srcObject = stream;
+
+    video.play().catch(() => {
+        console.log("Local preview play blocked");
+    });
+}
+
+function removeLocalScreenPreview() {
+
+    const card = document.getElementById("stream-card-local");
+
+    if (card) {
+        card.remove();
+    }
+}
+
+/* ================= START / STOP SCREEN STREAM ================= */
 if (streamBtn) {
 
     streamBtn.onclick = async () => {
@@ -268,16 +322,6 @@ if (streamBtn) {
 async function startScreenStream() {
 
     try {
-
-        /*
-            IMPORTANT:
-            Do NOT write:
-            localStream = await getDisplayMedia(...)
-
-            That breaks microphone voice.
-
-            Screen stream must stay separate.
-        */
         screenStream = await navigator.mediaDevices.getDisplayMedia({
             video: true,
             audio: false
@@ -297,6 +341,8 @@ async function startScreenStream() {
         }
 
         status.innerText = "Screen streaming 🖥️";
+
+        showLocalScreenPreview(screenStream);
 
         Object.keys(peers).forEach(async (id) => {
             const peer = peers[id];
@@ -335,6 +381,8 @@ async function stopScreenStream() {
     screenStream = null;
     screenTrack = null;
 
+    removeLocalScreenPreview();
+
     if (streamBtn) {
         streamBtn.innerText = "🖥️ Start Stream";
     }
@@ -368,7 +416,6 @@ function createPeer(id) {
     peer.onicecandidate = (event) => {
 
         if (event.candidate) {
-
             socket.emit("ice", {
                 target: id,
                 candidate: event.candidate
@@ -411,7 +458,6 @@ function handleRemoteAudio(id, event) {
     let audio = document.getElementById("audio-" + id);
 
     if (!audio) {
-
         audio = document.createElement("audio");
 
         audio.id = "audio-" + id;
@@ -443,53 +489,46 @@ function handleRemoteAudio(id, event) {
     });
 }
 
-/* ================= REMOTE VIDEO / SCREEN ================= */
+/* ================= REMOTE VIDEO ================= */
 function handleRemoteVideo(id, event) {
 
-    let video = document.getElementById("video-" + id);
+    const grid = getStreamsGrid();
 
-    if (!video) {
+    let card = document.getElementById("stream-card-" + id);
 
-        video = document.createElement("video");
+    if (!card) {
+        card = document.createElement("div");
+        card.id = "stream-card-" + id;
+        card.className = "stream-card";
 
+        const title = document.createElement("div");
+        title.className = "stream-card-title";
+        title.innerText = "Screen stream from user";
+
+        const video = document.createElement("video");
         video.id = "video-" + id;
         video.autoplay = true;
         video.controls = true;
         video.playsInline = true;
-        video.style.width = "100%";
-        video.style.maxWidth = "700px";
-        video.style.margin = "12px";
-        video.style.borderRadius = "12px";
-        video.style.background = "#000";
 
-        const content = document.querySelector(".content") || document.body;
-
-        const title = document.createElement("p");
-        title.id = "video-title-" + id;
-        title.innerText = "Screen stream from user";
-        title.style.margin = "12px";
-        title.style.color = "#b8beca";
-
-        content.appendChild(title);
-        content.appendChild(video);
+        card.appendChild(title);
+        card.appendChild(video);
+        grid.appendChild(card);
     }
+
+    const video = document.getElementById("video-" + id);
 
     video.srcObject = event.streams[0];
 
     video.play().catch(() => {
-        console.log("Video autoplay blocked. Click page once.");
+        console.log("Remote video autoplay blocked");
     });
 
     event.track.onended = () => {
-        const oldVideo = document.getElementById("video-" + id);
-        const oldTitle = document.getElementById("video-title-" + id);
+        const oldCard = document.getElementById("stream-card-" + id);
 
-        if (oldVideo) {
-            oldVideo.remove();
-        }
-
-        if (oldTitle) {
-            oldTitle.remove();
+        if (oldCard) {
+            oldCard.remove();
         }
     };
 }
@@ -508,7 +547,6 @@ socket.on("user-joined", async (user) => {
     const peer = createPeer(user.id);
 
     try {
-
         const offer = await peer.createOffer();
 
         await peer.setLocalDescription(offer);
@@ -519,7 +557,6 @@ socket.on("user-joined", async (user) => {
         });
 
     } catch (err) {
-
         console.error("OFFER ERROR:", err);
     }
 });
@@ -530,7 +567,6 @@ socket.on("offer", async ({ sender, offer }) => {
     const peer = createPeer(sender);
 
     try {
-
         await peer.setRemoteDescription(offer);
 
         const answer = await peer.createAnswer();
@@ -543,7 +579,6 @@ socket.on("offer", async ({ sender, offer }) => {
         });
 
     } catch (err) {
-
         console.error("OFFER HANDLE ERROR:", err);
     }
 });
@@ -558,11 +593,9 @@ socket.on("answer", async ({ sender, answer }) => {
     }
 
     try {
-
         await peer.setRemoteDescription(answer);
 
     } catch (err) {
-
         console.error("ANSWER ERROR:", err);
     }
 });
@@ -577,11 +610,9 @@ socket.on("ice", async ({ sender, candidate }) => {
     }
 
     try {
-
         await peer.addIceCandidate(candidate);
 
     } catch (err) {
-
         console.error("ICE ERROR:", err);
     }
 });

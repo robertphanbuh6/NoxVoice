@@ -18,18 +18,14 @@
         <p id="accountName">Loading...</p>
 
         <input id="username" placeholder="Username" readonly>
-
         <input id="roomCode" placeholder="Room Code">
 
         <button id="voiceBtn">🎤 Enable Mic</button>
-
         <button id="joinBtn">Join Room</button>
-
         <button id="muteBtn">🔇 Mute</button>
 
+        <!-- KEEP ONLY THIS ONE STREAM BUTTON -->
         <button id="streamBtn">🖥️ Start Stream</button>
-
-        <button id="stopStreamBtn">⛔ Stop Stream</button>
 
         <button id="logoutBtn">Logout</button>
 
@@ -38,7 +34,6 @@
         <div class="divider"></div>
 
         <h3>Connected Users</h3>
-
         <ul id="userList"></ul>
 
     </div>
@@ -53,14 +48,10 @@
 
             <p>Enable mic first, join a room, then start streaming if needed.</p>
 
-            <div id="localStreamBox" class="stream-card hidden">
-                <h3>Your Stream</h3>
-                <video id="localPreview" autoplay muted playsinline></video>
-            </div>
+            <h3>Room Streams</h3>
 
-            <h3 class="stream-title">Room Streams</h3>
-
-            <div id="remoteStreams" class="remote-streams"></div>
+            <!-- STREAM OUTPUT WILL APPEAR HERE -->
+            <div id="streamsGrid"></div>
 
         </div>
 
