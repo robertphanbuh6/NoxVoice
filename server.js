@@ -1,9 +1,11 @@
+require("dotenv").config();
+
 const express = require("express");
 const http = require("http");
 const path = require("path");
-const fs = require("fs");
 const bcrypt = require("bcryptjs");
 const session = require("express-session");
+const mongoose = require("mongoose");
 const { Server } = require("socket.io");
 
 const app = express();
@@ -15,15 +17,52 @@ const io = new Server(server, {
     }
 });
 
-/* ================= PATHS ================= */
 const publicPath = path.join(__dirname, "public");
-const usersFile = path.join(__dirname, "users.json");
 
-/* ================= MIDDLEWARE ================= */
 app.use(express.json());
 
+/* ================= MONGODB ================= */
+
+const mongoUri = process.env.MONGO_URI;
+
+if (!mongoUri) {
+    console.error("MONGO_URI is missing. Check your .env file.");
+    process.exit(1);
+}
+
+mongoose.connect(mongoUri)
+    .then(() => {
+        console.log("MONGODB CONNECTED");
+    })
+    .catch((err) => {
+        console.error("MONGODB CONNECTION ERROR:", err);
+        process.exit(1);
+    });
+
+const userSchema = new mongoose.Schema({
+    username: {
+        type: String,
+        required: true
+    },
+    usernameLower: {
+        type: String,
+        required: true,
+        unique: true
+    },
+    password: {
+        type: String,
+        required: true
+    }
+}, {
+    timestamps: true
+});
+
+const User = mongoose.model("User", userSchema);
+
+/* ================= SESSION ================= */
+
 const sessionMiddleware = session({
-    secret: process.env.SESSION_SECRET || "noxvoice_secret_key_change_later",
+    secret: process.env.SESSION_SECRET || "change_this_secret_later",
     resave: false,
     saveUninitialized: false,
     cookie: {
@@ -34,25 +73,8 @@ const sessionMiddleware = session({
 app.use(sessionMiddleware);
 io.engine.use(sessionMiddleware);
 
-/* ================= USERS FILE ================= */
-if (!fs.existsSync(usersFile)) {
-    fs.writeFileSync(usersFile, JSON.stringify([], null, 2));
-}
+/* ================= AUTH CHECK ================= */
 
-function readUsers() {
-    try {
-        return JSON.parse(fs.readFileSync(usersFile, "utf8"));
-    } catch (err) {
-        console.error("READ USERS ERROR:", err);
-        return [];
-    }
-}
-
-function writeUsers(users) {
-    fs.writeFileSync(usersFile, JSON.stringify(users, null, 2));
-}
-
-/* ================= LOGIN PROTECTION ================= */
 function requireLogin(req, res, next) {
     if (!req.session.user) {
         return res.redirect("/login.html");
@@ -63,112 +85,125 @@ function requireLogin(req, res, next) {
 
 /* ================= AUTH ROUTES ================= */
 
-/* REGISTER */
 app.post("/api/register", async (req, res) => {
 
-    const username = String(req.body.username || "").trim();
-    const password = String(req.body.password || "").trim();
+    try {
+        const username = String(req.body.username || "").trim();
+        const password = String(req.body.password || "").trim();
 
-    if (!username || !password) {
-        return res.json({
+        if (!username || !password) {
+            return res.json({
+                success: false,
+                message: "Username and password are required"
+            });
+        }
+
+        if (username.length < 3) {
+            return res.json({
+                success: false,
+                message: "Username must be at least 3 characters"
+            });
+        }
+
+        if (password.length < 6) {
+            return res.json({
+                success: false,
+                message: "Password must be at least 6 characters"
+            });
+        }
+
+        const usernameLower = username.toLowerCase();
+
+        const existingUser = await User.findOne({
+            usernameLower: usernameLower
+        });
+
+        if (existingUser) {
+            return res.json({
+                success: false,
+                message: "Username already exists"
+            });
+        }
+
+        const hashedPassword = await bcrypt.hash(password, 10);
+
+        await User.create({
+            username: username,
+            usernameLower: usernameLower,
+            password: hashedPassword
+        });
+
+        req.session.user = {
+            username: username
+        };
+
+        res.json({
+            success: true,
+            message: "Registered successfully"
+        });
+
+    } catch (err) {
+        console.error("REGISTER ERROR:", err);
+
+        res.json({
             success: false,
-            message: "Username and password required"
+            message: "Registration failed"
         });
     }
-
-    if (username.length < 3) {
-        return res.json({
-            success: false,
-            message: "Username must be at least 3 characters"
-        });
-    }
-
-    if (password.length < 6) {
-        return res.json({
-            success: false,
-            message: "Password must be at least 6 characters"
-        });
-    }
-
-    const users = readUsers();
-
-    /* CHECK DUPLICATE USERNAME */
-    const usernameExists = users.find(
-        user => user.username.toLowerCase() === username.toLowerCase()
-    );
-
-    if (usernameExists) {
-        return res.json({
-            success: false,
-            message: "Username already exists. Please choose another username."
-        });
-    }
-
-    const hashedPassword = await bcrypt.hash(password, 10);
-
-    users.push({
-        username: username,
-        password: hashedPassword
-    });
-
-    writeUsers(users);
-
-    req.session.user = {
-        username: username
-    };
-
-    res.json({
-        success: true,
-        message: "Account created successfully"
-    });
 });
 
-/* LOGIN */
 app.post("/api/login", async (req, res) => {
 
-    const username = String(req.body.username || "").trim();
-    const password = String(req.body.password || "").trim();
+    try {
+        const username = String(req.body.username || "").trim();
+        const password = String(req.body.password || "").trim();
 
-    if (!username || !password) {
-        return res.json({
+        if (!username || !password) {
+            return res.json({
+                success: false,
+                message: "Username and password are required"
+            });
+        }
+
+        const user = await User.findOne({
+            usernameLower: username.toLowerCase()
+        });
+
+        if (!user) {
+            return res.json({
+                success: false,
+                message: "Invalid username or password"
+            });
+        }
+
+        const passwordMatch = await bcrypt.compare(password, user.password);
+
+        if (!passwordMatch) {
+            return res.json({
+                success: false,
+                message: "Invalid username or password"
+            });
+        }
+
+        req.session.user = {
+            username: user.username
+        };
+
+        res.json({
+            success: true,
+            message: "Logged in successfully"
+        });
+
+    } catch (err) {
+        console.error("LOGIN ERROR:", err);
+
+        res.json({
             success: false,
-            message: "Username and password required"
+            message: "Login failed"
         });
     }
-
-    const users = readUsers();
-
-    const user = users.find(
-        u => u.username.toLowerCase() === username.toLowerCase()
-    );
-
-    if (!user) {
-        return res.json({
-            success: false,
-            message: "Invalid username or password"
-        });
-    }
-
-    const passwordOk = await bcrypt.compare(password, user.password);
-
-    if (!passwordOk) {
-        return res.json({
-            success: false,
-            message: "Invalid username or password"
-        });
-    }
-
-    req.session.user = {
-        username: user.username
-    };
-
-    res.json({
-        success: true,
-        message: "Logged in successfully"
-    });
 });
 
-/* LOGOUT */
 app.post("/api/logout", (req, res) => {
 
     req.session.destroy(() => {
@@ -178,7 +213,6 @@ app.post("/api/logout", (req, res) => {
     });
 });
 
-/* CHECK CURRENT USER */
 app.get("/api/me", (req, res) => {
 
     if (!req.session.user) {
@@ -203,51 +237,23 @@ app.get("/index.html", requireLogin, (req, res) => {
     res.sendFile(path.join(publicPath, "index.html"));
 });
 
-app.get("/login.html", (req, res) => {
-    res.sendFile(path.join(publicPath, "login.html"));
-});
+app.use(express.static(publicPath));
 
-app.use(express.static(publicPath, {
-    index: false
-}));
-
-/* ================= VOICE ROOMS ================= */
+/* ================= SOCKET / VOICE ================= */
 
 const rooms = {};
-
-function removeSocketFromRoom(socket) {
-
-    const room = socket.room;
-
-    if (room && rooms[room]) {
-
-        rooms[room] = rooms[room].filter(
-            user => user.id !== socket.id
-        );
-
-        io.to(room).emit("user-list", rooms[room]);
-
-        if (rooms[room].length === 0) {
-            delete rooms[room];
-        }
-    }
-}
-
-/* ================= SOCKET.IO ================= */
 
 io.on("connection", (socket) => {
 
     const sessionUser = socket.request.session.user;
 
     if (!sessionUser) {
-        console.log("SOCKET REJECTED: NOT LOGGED IN");
         socket.disconnect();
         return;
     }
 
     console.log("CONNECTED:", socket.id, sessionUser.username);
 
-    /* JOIN ROOM */
     socket.on("join-room", ({ room }) => {
 
         const username = sessionUser.username;
@@ -256,29 +262,17 @@ io.on("connection", (socket) => {
             return;
         }
 
+        socket.join(room);
+        socket.room = room;
+        socket.username = username;
+
         if (!rooms[room]) {
             rooms[room] = [];
         }
 
-        /* BLOCK SAME USERNAME IN SAME ROOM */
-        const sameUsernameUser = rooms[room].find(
-            user => user.username.toLowerCase() === username.toLowerCase()
+        rooms[room] = rooms[room].filter(
+            user => user.username !== username
         );
-
-        if (sameUsernameUser && sameUsernameUser.id !== socket.id) {
-            socket.emit("join-error", {
-                message: "This username is already in this room"
-            });
-
-            return;
-        }
-
-        /* REMOVE FROM OLD ROOM FIRST */
-        removeSocketFromRoom(socket);
-
-        socket.join(room);
-        socket.room = room;
-        socket.username = username;
 
         rooms[room].push({
             id: socket.id,
@@ -292,10 +286,9 @@ io.on("connection", (socket) => {
             username: username
         });
 
-        console.log(username + " joined room " + room);
+        console.log(username + " joined " + room);
     });
 
-    /* WEBRTC OFFER */
     socket.on("offer", (data) => {
         io.to(data.target).emit("offer", {
             sender: socket.id,
@@ -303,7 +296,6 @@ io.on("connection", (socket) => {
         });
     });
 
-    /* WEBRTC ANSWER */
     socket.on("answer", (data) => {
         io.to(data.target).emit("answer", {
             sender: socket.id,
@@ -311,28 +303,29 @@ io.on("connection", (socket) => {
         });
     });
 
-    /* WEBRTC ICE */
     socket.on("ice", (data) => {
         io.to(data.target).emit("ice", {
             sender: socket.id,
             candidate: data.candidate
         });
     });
-	
-	/* Stream */
-	socket.on("stream-stopped", () => {
-    if (socket.room) {
-        socket.to(socket.room).emit("stream-stopped", {
-            sender: socket.id
-        });
-    }
-});
 
-
-    /* DISCONNECT */
     socket.on("disconnect", () => {
 
-        removeSocketFromRoom(socket);
+        const room = socket.room;
+
+        if (room && rooms[room]) {
+
+            rooms[room] = rooms[room].filter(
+                user => user.id !== socket.id
+            );
+
+            io.to(room).emit("user-list", rooms[room]);
+
+            if (rooms[room].length === 0) {
+                delete rooms[room];
+            }
+        }
 
         console.log("DISCONNECTED:", socket.id);
     });

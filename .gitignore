@@ -7,3 +7,4 @@ build/
 *.rar
 *.zip
 .env
+users.json
