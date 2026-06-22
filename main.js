@@ -60,48 +60,44 @@ function createWindow() {
         }
     );
 
-    // Force no-cache request headers
-    session.defaultSession.webRequest.onBeforeSendHeaders((details, callback) => {
-        details.requestHeaders["Cache-Control"] = "no-cache, no-store, must-revalidate";
-        details.requestHeaders["Pragma"] = "no-cache";
-        details.requestHeaders["Expires"] = "0";
+    mainWindow.webContents.on("did-fail-load", (event, errorCode, errorDescription) => {
+        console.error("LOAD FAILED:", errorCode, errorDescription);
 
-        callback({
-            requestHeaders: details.requestHeaders
+        dialog.showMessageBox({
+            type: "error",
+            title: "NoxVoice Load Error",
+            message: "NoxVoice could not load.",
+            detail: errorDescription
         });
     });
 
-    // Force no-cache response headers
-    session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
-        const responseHeaders = details.responseHeaders || {};
+    mainWindow.webContents.on("did-finish-load", () => {
+        console.log("NoxVoice loaded successfully");
+    });
 
-        responseHeaders["Cache-Control"] = ["no-cache, no-store, must-revalidate"];
-        responseHeaders["Pragma"] = ["no-cache"];
-        responseHeaders["Expires"] = ["0"];
+    mainWindow.webContents.on("before-input-event", (event, input) => {
+        if (input.control && input.shift && input.key.toLowerCase() === "i") {
+            mainWindow.webContents.openDevTools({
+                mode: "detach"
+            });
+        }
 
-        callback({
-            responseHeaders: responseHeaders
+        if (input.key === "F12") {
+            mainWindow.webContents.openDevTools({
+                mode: "detach"
+            });
+        }
+    });
+
+    session.defaultSession.clearCache()
+        .then(() => {
+            const freshUrl = APP_URL + "/?desktopFresh=" + Date.now();
+            mainWindow.loadURL(freshUrl);
+        })
+        .catch(() => {
+            const freshUrl = APP_URL + "/?desktopFresh=" + Date.now();
+            mainWindow.loadURL(freshUrl);
         });
-    });
-
-    // Clear Electron cache before loading app
-    Promise.all([
-        session.defaultSession.clearCache(),
-        session.defaultSession.clearCodeCaches()
-    ]).then(() => {
-        const freshUrl = APP_URL + "/index.html?desktopFresh=" + Date.now();
-
-        mainWindow.loadURL(freshUrl);
-    });
-
-    // TEMPORARY DEBUG: opens DevTools so we can see why button fails
-    mainWindow.webContents.once("did-finish-load", () => {
-        mainWindow.webContents.openDevTools({
-            mode: "detach"
-        });
-
-        console.log("NoxVoice EXE loaded fresh:", APP_URL);
-    });
 
     mainWindow.on("closed", () => {
         mainWindow = null;
