@@ -6,6 +6,7 @@ const path = require("path");
 const bcrypt = require("bcryptjs");
 const session = require("express-session");
 const mongoose = require("mongoose");
+const crypto = require("crypto");
 const { Server } = require("socket.io");
 
 const app = express();
@@ -26,7 +27,7 @@ app.use(express.json());
 const mongoUri = process.env.MONGO_URI;
 
 if (!mongoUri) {
-    console.error("MONGO_URI is missing. Check your .env file.");
+    console.error("MONGO_URI is missing. Check your .env file or Render Environment Variables.");
     process.exit(1);
 }
 
@@ -38,6 +39,8 @@ mongoose.connect(mongoUri)
         console.error("MONGODB CONNECTION ERROR:", err);
         process.exit(1);
     });
+
+/* ================= USER MODEL ================= */
 
 const userSchema = new mongoose.Schema({
     username: {
@@ -59,6 +62,54 @@ const userSchema = new mongoose.Schema({
 
 const User = mongoose.model("User", userSchema);
 
+/* ================= SERVER / CHANNEL MODEL ================= */
+
+const channelSchema = new mongoose.Schema({
+    id: {
+        type: String,
+        required: true
+    },
+    name: {
+        type: String,
+        required: true
+    },
+    type: {
+        type: String,
+        enum: ["text", "voice"],
+        default: "voice"
+    }
+}, {
+    _id: false
+});
+
+const voiceServerSchema = new mongoose.Schema({
+    name: {
+        type: String,
+        required: true
+    },
+    ownerUsername: {
+        type: String,
+        required: true
+    },
+    members: {
+        type: [String],
+        default: []
+    },
+    inviteCode: {
+        type: String,
+        required: true,
+        unique: true
+    },
+    channels: {
+        type: [channelSchema],
+        default: []
+    }
+}, {
+    timestamps: true
+});
+
+const VoiceServer = mongoose.model("VoiceServer", voiceServerSchema);
+
 /* ================= SESSION ================= */
 
 const sessionMiddleware = session({
@@ -73,7 +124,7 @@ const sessionMiddleware = session({
 app.use(sessionMiddleware);
 io.engine.use(sessionMiddleware);
 
-/* ================= AUTH CHECK ================= */
+/* ================= HELPERS ================= */
 
 function requireLogin(req, res, next) {
     if (!req.session.user) {
@@ -83,10 +134,47 @@ function requireLogin(req, res, next) {
     next();
 }
 
+function requireApiLogin(req, res, next) {
+    if (!req.session.user) {
+        return res.json({
+            success: false,
+            message: "Not logged in"
+        });
+    }
+
+    next();
+}
+
+function makeInviteCode() {
+    return crypto.randomBytes(4).toString("hex");
+}
+
+function makeChannelId(name) {
+    const clean = String(name || "channel")
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, "-")
+        .replace(/^-+|-+$/g, "");
+
+    return clean + "-" + crypto.randomBytes(3).toString("hex");
+}
+
+async function getUserServer(serverId, username) {
+    const foundServer = await VoiceServer.findById(serverId);
+
+    if (!foundServer) {
+        return null;
+    }
+
+    if (!foundServer.members.includes(username)) {
+        return null;
+    }
+
+    return foundServer;
+}
+
 /* ================= AUTH ROUTES ================= */
 
 app.post("/api/register", async (req, res) => {
-
     try {
         const username = String(req.body.username || "").trim();
         const password = String(req.body.password || "").trim();
@@ -153,7 +241,6 @@ app.post("/api/register", async (req, res) => {
 });
 
 app.post("/api/login", async (req, res) => {
-
     try {
         const username = String(req.body.username || "").trim();
         const password = String(req.body.password || "").trim();
@@ -205,7 +292,6 @@ app.post("/api/login", async (req, res) => {
 });
 
 app.post("/api/logout", (req, res) => {
-
     req.session.destroy(() => {
         res.json({
             success: true
@@ -214,7 +300,6 @@ app.post("/api/logout", (req, res) => {
 });
 
 app.get("/api/me", (req, res) => {
-
     if (!req.session.user) {
         return res.json({
             loggedIn: false
@@ -225,6 +310,222 @@ app.get("/api/me", (req, res) => {
         loggedIn: true,
         username: req.session.user.username
     });
+});
+
+/* ================= SERVER / CHANNEL ROUTES ================= */
+
+app.get("/api/servers", requireApiLogin, async (req, res) => {
+    try {
+        const username = req.session.user.username;
+
+        const servers = await VoiceServer.find({
+            members: username
+        }).sort({
+            createdAt: -1
+        });
+
+        res.json({
+            success: true,
+            servers: servers
+        });
+
+    } catch (err) {
+        console.error("GET SERVERS ERROR:", err);
+
+        res.json({
+            success: false,
+            message: "Could not load servers"
+        });
+    }
+});
+
+app.post("/api/servers", requireApiLogin, async (req, res) => {
+    try {
+        const username = req.session.user.username;
+        const name = String(req.body.name || "").trim();
+
+        if (!name) {
+            return res.json({
+                success: false,
+                message: "Server name is required"
+            });
+        }
+
+        const newServer = await VoiceServer.create({
+            name: name,
+            ownerUsername: username,
+            members: [username],
+            inviteCode: makeInviteCode(),
+            channels: [
+                {
+                    id: "general-chat",
+                    name: "general-chat",
+                    type: "text"
+                },
+                {
+                    id: "general",
+                    name: "General",
+                    type: "voice"
+                },
+                {
+                    id: "gaming",
+                    name: "Gaming",
+                    type: "voice"
+                },
+                {
+                    id: "music",
+                    name: "Music",
+                    type: "voice"
+                }
+            ]
+        });
+
+        res.json({
+            success: true,
+            server: newServer
+        });
+
+    } catch (err) {
+        console.error("CREATE SERVER ERROR:", err);
+
+        res.json({
+            success: false,
+            message: "Could not create server"
+        });
+    }
+});
+
+app.post("/api/servers/join", requireApiLogin, async (req, res) => {
+    try {
+        const username = req.session.user.username;
+        const code = String(req.body.inviteCode || "").trim();
+
+        if (!code) {
+            return res.json({
+                success: false,
+                message: "Invite code is required"
+            });
+        }
+
+        const foundServer = await VoiceServer.findOne({
+            $or: [
+                { inviteCode: code },
+                { _id: mongoose.Types.ObjectId.isValid(code) ? code : null }
+            ]
+        });
+
+        if (!foundServer) {
+            return res.json({
+                success: false,
+                message: "Server not found"
+            });
+        }
+
+        if (!foundServer.members.includes(username)) {
+            foundServer.members.push(username);
+            await foundServer.save();
+        }
+
+        res.json({
+            success: true,
+            server: foundServer
+        });
+
+    } catch (err) {
+        console.error("JOIN SERVER ERROR:", err);
+
+        res.json({
+            success: false,
+            message: "Could not join server"
+        });
+    }
+});
+
+app.get("/api/servers/:serverId", requireApiLogin, async (req, res) => {
+    try {
+        const username = req.session.user.username;
+        const foundServer = await getUserServer(req.params.serverId, username);
+
+        if (!foundServer) {
+            return res.json({
+                success: false,
+                message: "Server not found"
+            });
+        }
+
+        res.json({
+            success: true,
+            server: foundServer
+        });
+
+    } catch (err) {
+        console.error("GET SERVER ERROR:", err);
+
+        res.json({
+            success: false,
+            message: "Could not load server"
+        });
+    }
+});
+
+app.post("/api/servers/:serverId/channels", requireApiLogin, async (req, res) => {
+    try {
+        const username = req.session.user.username;
+        const foundServer = await getUserServer(req.params.serverId, username);
+
+        if (!foundServer) {
+            return res.json({
+                success: false,
+                message: "Server not found"
+            });
+        }
+
+        if (foundServer.ownerUsername !== username) {
+            return res.json({
+                success: false,
+                message: "Only the server owner can create channels"
+            });
+        }
+
+        const name = String(req.body.name || "").trim();
+        const type = String(req.body.type || "voice").trim();
+
+        if (!name) {
+            return res.json({
+                success: false,
+                message: "Channel name is required"
+            });
+        }
+
+        if (!["text", "voice"].includes(type)) {
+            return res.json({
+                success: false,
+                message: "Invalid channel type"
+            });
+        }
+
+        const channel = {
+            id: makeChannelId(name),
+            name: name,
+            type: type
+        };
+
+        foundServer.channels.push(channel);
+        await foundServer.save();
+
+        res.json({
+            success: true,
+            server: foundServer
+        });
+
+    } catch (err) {
+        console.error("CREATE CHANNEL ERROR:", err);
+
+        res.json({
+            success: false,
+            message: "Could not create channel"
+        });
+    }
 });
 
 /* ================= PAGES ================= */
@@ -241,10 +542,84 @@ app.use(express.static(publicPath));
 
 /* ================= SOCKET / VOICE ================= */
 
-const rooms = {};
+const voiceRooms = {};
+
+function updateVoiceRoomList(roomName) {
+    const users = voiceRooms[roomName] || [];
+
+    io.to(roomName).emit("voice-user-list", users);
+    io.to(roomName).emit("user-list", users);
+}
+
+function removeSocketFromVoiceRoom(socket) {
+    const oldRoom = socket.voiceRoom;
+
+    if (!oldRoom || !voiceRooms[oldRoom]) {
+        return;
+    }
+
+    voiceRooms[oldRoom] = voiceRooms[oldRoom].filter(
+        user => user.id !== socket.id
+    );
+
+    socket.to(oldRoom).emit("user-left", {
+        id: socket.id,
+        username: socket.username
+    });
+
+    updateVoiceRoomList(oldRoom);
+
+    if (voiceRooms[oldRoom].length === 0) {
+        delete voiceRooms[oldRoom];
+    }
+
+    socket.leave(oldRoom);
+
+    socket.voiceRoom = null;
+    socket.currentServerId = null;
+    socket.currentChannelId = null;
+}
+
+function joinSocketToVoiceRoom(socket, roomName, serverId, channelId) {
+    const username = socket.request.session.user.username;
+
+    removeSocketFromVoiceRoom(socket);
+
+    socket.join(roomName);
+
+    socket.voiceRoom = roomName;
+    socket.currentServerId = serverId;
+    socket.currentChannelId = channelId;
+    socket.username = username;
+
+    if (!voiceRooms[roomName]) {
+        voiceRooms[roomName] = [];
+    }
+
+    voiceRooms[roomName] = voiceRooms[roomName].filter(
+        user => user.username !== username
+    );
+
+    voiceRooms[roomName].push({
+        id: socket.id,
+        username: username,
+        serverId: serverId,
+        channelId: channelId,
+        isStreaming: false,
+        isMuted: false
+    });
+
+    updateVoiceRoomList(roomName);
+
+    socket.to(roomName).emit("user-joined", {
+        id: socket.id,
+        username: username
+    });
+
+    console.log(username + " joined voice room " + roomName);
+}
 
 io.on("connection", (socket) => {
-
     const sessionUser = socket.request.session.user;
 
     if (!sessionUser) {
@@ -254,39 +629,103 @@ io.on("connection", (socket) => {
 
     console.log("CONNECTED:", socket.id, sessionUser.username);
 
+    socket.on("join-voice-channel", async ({ serverId, channelId }) => {
+        try {
+            const username = sessionUser.username;
+
+            const foundServer = await getUserServer(serverId, username);
+
+            if (!foundServer) {
+                socket.emit("join-error", {
+                    message: "Server not found"
+                });
+                return;
+            }
+
+            const channel = foundServer.channels.find(
+                ch => ch.id === channelId && ch.type === "voice"
+            );
+
+            if (!channel) {
+                socket.emit("join-error", {
+                    message: "Voice channel not found"
+                });
+                return;
+            }
+
+            const roomName = "server:" + serverId + ":voice:" + channelId;
+
+            joinSocketToVoiceRoom(socket, roomName, serverId, channelId);
+
+        } catch (err) {
+            console.error("JOIN VOICE CHANNEL ERROR:", err);
+
+            socket.emit("join-error", {
+                message: "Could not join voice channel"
+            });
+        }
+    });
+
     socket.on("join-room", ({ room }) => {
-
-        const username = sessionUser.username;
-
-        if (!room || !username) {
+        if (!room) {
             return;
         }
 
-        socket.join(room);
-        socket.room = room;
-        socket.username = username;
+        const roomName = "legacy:" + room;
 
-        if (!rooms[room]) {
-            rooms[room] = [];
+        joinSocketToVoiceRoom(socket, roomName, "legacy", room);
+    });
+
+    socket.on("leave-voice-channel", () => {
+        removeSocketFromVoiceRoom(socket);
+    });
+
+    socket.on("stream-status", ({ isStreaming }) => {
+        const room = socket.voiceRoom;
+
+        if (!room || !voiceRooms[room]) {
+            return;
         }
 
-        rooms[room] = rooms[room].filter(
-            user => user.username !== username
+        const user = voiceRooms[room].find(
+            u => u.id === socket.id
         );
 
-        rooms[room].push({
+        if (user) {
+            user.isStreaming = !!isStreaming;
+        }
+
+        io.to(room).emit("user-stream-status", {
             id: socket.id,
-            username: username
+            username: socket.username,
+            isStreaming: !!isStreaming
         });
 
-        io.to(room).emit("user-list", rooms[room]);
+        updateVoiceRoomList(room);
+    });
 
-        socket.to(room).emit("user-joined", {
+    socket.on("mute-status", ({ isMuted }) => {
+        const room = socket.voiceRoom;
+
+        if (!room || !voiceRooms[room]) {
+            return;
+        }
+
+        const user = voiceRooms[room].find(
+            u => u.id === socket.id
+        );
+
+        if (user) {
+            user.isMuted = !!isMuted;
+        }
+
+        io.to(room).emit("user-mute-status", {
             id: socket.id,
-            username: username
+            username: socket.username,
+            isMuted: !!isMuted
         });
 
-        console.log(username + " joined " + room);
+        updateVoiceRoomList(room);
     });
 
     socket.on("offer", (data) => {
@@ -311,21 +750,7 @@ io.on("connection", (socket) => {
     });
 
     socket.on("disconnect", () => {
-
-        const room = socket.room;
-
-        if (room && rooms[room]) {
-
-            rooms[room] = rooms[room].filter(
-                user => user.id !== socket.id
-            );
-
-            io.to(room).emit("user-list", rooms[room]);
-
-            if (rooms[room].length === 0) {
-                delete rooms[room];
-            }
-        }
+        removeSocketFromVoiceRoom(socket);
 
         console.log("DISCONNECTED:", socket.id);
     });

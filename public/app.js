@@ -1,36 +1,353 @@
-console.log("NOXVOICE APP LOADED - MIC + STREAM AUDIO ENABLED");
+console.log("NOXVOICE APP LOADED - MANUAL SERVER SELECT + LIVE WATCH + MUTED ICON");
 
 const socket = io();
 
 /* ================= UI ELEMENTS ================= */
 const username = document.getElementById("username");
-const roomCode = document.getElementById("roomCode");
+const accountName = document.getElementById("accountName");
+
+const homeServerBtn = document.querySelector(".server-icon.home");
+const serverList = document.getElementById("serverList");
+const createServerBtn = document.getElementById("createServerBtn");
+const joinServerBtn = document.getElementById("joinServerBtn");
+
+const activeServerName = document.getElementById("activeServerName");
+const inviteCodeText = document.getElementById("inviteCodeText");
+
+const textChannelList = document.getElementById("textChannelList");
+const voiceChannelList = document.getElementById("voiceChannelList");
+const createVoiceChannelBtn = document.getElementById("createVoiceChannelBtn");
+
+const mainTitle = document.getElementById("mainTitle");
+const mainSubtitle = document.getElementById("mainSubtitle");
+
+const userList = document.getElementById("userList");
+
+const serverInfoTitle = document.getElementById("serverInfoTitle");
+const serverInfoText = document.getElementById("serverInfoText");
+
+const voiceStatusTitle = document.getElementById("voiceStatusTitle");
+const voiceStatusText = document.getElementById("voiceStatusText");
+
 const joinBtn = document.getElementById("joinBtn");
 const voiceBtn = document.getElementById("voiceBtn");
 const muteBtn = document.getElementById("muteBtn");
+const streamBtn = document.getElementById("streamBtn");
+const leaveVoiceBtn = document.getElementById("leaveVoiceBtn");
 const logoutBtn = document.getElementById("logoutBtn");
 const status = document.getElementById("status");
-const userList = document.getElementById("userList");
-const accountName = document.getElementById("accountName");
-
-const streamBtn =
-    document.getElementById("streamBtn") ||
-    document.getElementById("screenBtn") ||
-    document.getElementById("shareBtn");
 
 /* ================= STATE ================= */
-let localStream = null;       // microphone voice only
-let screenStream = null;      // screen video + stream audio
+let loggedInUsername = null;
+
+let servers = [];
+let activeServer = null;
+let activeVoiceChannel = null;
+let currentVoiceUsers = [];
+
+let localStream = null;
+let screenStream = null;
 let screenTrack = null;
 
 let micReady = false;
 let muted = false;
 let isStreaming = false;
-let loggedInUsername = null;
+let hasJoinedVoice = false;
 
 const peers = {};
 const userVolumes = {};
 const userMuted = {};
+const streamingUsers = {};
+const mutedUsers = {};
+
+const remoteVideoTracks = {};
+const remoteStreamAudioTracks = {};
+const watchingStreams = {};
+
+/* ================= JOIN / LEAVE SOUND EFFECTS ================= */
+let audioContext = null;
+
+function unlockSound() {
+    try {
+        if (!audioContext) {
+            audioContext = new (window.AudioContext || window.webkitAudioContext)();
+        }
+
+        if (audioContext.state === "suspended") {
+            audioContext.resume();
+        }
+    } catch (err) {
+        console.log("Audio unlock error:", err);
+    }
+}
+
+document.addEventListener("click", unlockSound);
+document.addEventListener("keydown", unlockSound);
+
+function playTone(frequency, duration, type, volume) {
+    try {
+        unlockSound();
+
+        if (!audioContext) {
+            return;
+        }
+
+        const oscillator = audioContext.createOscillator();
+        const gain = audioContext.createGain();
+
+        oscillator.type = type;
+        oscillator.frequency.setValueAtTime(frequency, audioContext.currentTime);
+
+        gain.gain.setValueAtTime(volume, audioContext.currentTime);
+        gain.gain.exponentialRampToValueAtTime(
+            0.001,
+            audioContext.currentTime + duration
+        );
+
+        oscillator.connect(gain);
+        gain.connect(audioContext.destination);
+
+        oscillator.start(audioContext.currentTime);
+        oscillator.stop(audioContext.currentTime + duration);
+
+    } catch (err) {
+        console.log("Sound error:", err);
+    }
+}
+
+function playUserJoinSound() {
+    playTone(660, 0.15, "sine", 0.18);
+
+    setTimeout(() => {
+        playTone(880, 0.15, "sine", 0.18);
+    }, 120);
+}
+
+function playUserLeaveSound() {
+    playTone(520, 0.15, "sine", 0.18);
+
+    setTimeout(() => {
+        playTone(330, 0.15, "sine", 0.18);
+    }, 120);
+}
+
+/* ================= USER MENU ================= */
+let userVolumeMenu = null;
+
+function closeUserVolumeMenu() {
+    if (userVolumeMenu) {
+        userVolumeMenu.remove();
+        userVolumeMenu = null;
+    }
+}
+
+document.addEventListener("click", closeUserVolumeMenu);
+
+function showUserVolumeMenu(event, user) {
+    event.preventDefault();
+    event.stopPropagation();
+
+    if (!user || user.id === socket.id) {
+        return;
+    }
+
+    closeUserVolumeMenu();
+
+    userVolumeMenu = document.createElement("div");
+    userVolumeMenu.className = "user-volume-menu";
+
+    userVolumeMenu.onclick = (e) => {
+        e.stopPropagation();
+    };
+
+    userVolumeMenu.oncontextmenu = (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+    };
+
+    const title = document.createElement("div");
+    title.className = "user-volume-menu-title";
+    title.innerText = user.username;
+
+    userVolumeMenu.appendChild(title);
+
+    if (streamingUsers[user.id] || user.isStreaming) {
+        const watchBtn = document.createElement("button");
+        watchBtn.className = "right-click-watch-btn";
+
+        if (watchingStreams[user.id]) {
+            watchBtn.innerText = "Stop Watching";
+        } else {
+            watchBtn.innerText = "▶ Watch Stream";
+        }
+
+        watchBtn.onclick = () => {
+            if (watchingStreams[user.id]) {
+                closeWatchedStream(user.id);
+            } else {
+                watchUserStream(user);
+            }
+
+            closeUserVolumeMenu();
+        };
+
+        userVolumeMenu.appendChild(watchBtn);
+    }
+
+    const label = document.createElement("div");
+    label.className = "user-volume-menu-label";
+    label.innerText = "User Voice Volume";
+
+    const slider = document.createElement("input");
+    slider.type = "range";
+    slider.min = "0";
+    slider.max = "1";
+    slider.step = "0.01";
+    slider.value = userVolumes[user.id] ?? 1;
+    slider.className = "right-click-volume-slider";
+
+    const percent = document.createElement("div");
+    percent.className = "user-volume-percent";
+    percent.innerText = Math.round(Number(slider.value) * 100) + "%";
+
+    slider.oninput = () => {
+        userVolumes[user.id] = Number(slider.value);
+        percent.innerText = Math.round(userVolumes[user.id] * 100) + "%";
+        applyUserAudioSettings(user.id);
+    };
+
+    const muteBtn = document.createElement("button");
+    muteBtn.className = "right-click-mute-btn";
+
+    if (userMuted[user.id]) {
+        muteBtn.innerText = "🔊 Unmute User";
+    } else {
+        muteBtn.innerText = "🔇 Mute User";
+    }
+
+    muteBtn.onclick = () => {
+        userMuted[user.id] = !userMuted[user.id];
+
+        applyUserAudioSettings(user.id);
+
+        if (userMuted[user.id]) {
+            muteBtn.innerText = "🔊 Unmute User";
+        } else {
+            muteBtn.innerText = "🔇 Mute User";
+        }
+
+        renderCurrentUsers();
+        renderChannels();
+    };
+
+    userVolumeMenu.appendChild(label);
+    userVolumeMenu.appendChild(slider);
+    userVolumeMenu.appendChild(percent);
+    userVolumeMenu.appendChild(muteBtn);
+
+    document.body.appendChild(userVolumeMenu);
+
+    const menuWidth = 230;
+    const menuHeight = 230;
+
+    let x = event.clientX;
+    let y = event.clientY;
+
+    if (x + menuWidth > window.innerWidth) {
+        x = window.innerWidth - menuWidth - 12;
+    }
+
+    if (y + menuHeight > window.innerHeight) {
+        y = window.innerHeight - menuHeight - 12;
+    }
+
+    userVolumeMenu.style.left = x + "px";
+    userVolumeMenu.style.top = y + "px";
+}
+
+/* ================= WATCH STREAM FUNCTIONS ================= */
+function watchUserStream(user) {
+    watchingStreams[user.id] = true;
+
+    if (!remoteVideoTracks[user.id]) {
+        alert("Stream is starting. Please click Watch Stream again in a moment.");
+        return;
+    }
+
+    showRemoteStream(user.id, user.username);
+}
+
+function closeWatchedStream(id) {
+    watchingStreams[id] = false;
+
+    const card = document.getElementById("stream-card-" + id);
+
+    if (card) {
+        card.remove();
+    }
+}
+
+function showRemoteStream(id, usernameText) {
+    const videoTrack = remoteVideoTracks[id];
+
+    if (!videoTrack) {
+        return;
+    }
+
+    const grid = getStreamsGrid();
+
+    let card = document.getElementById("stream-card-" + id);
+
+    if (!card) {
+        card = document.createElement("div");
+        card.id = "stream-card-" + id;
+        card.className = "stream-card";
+
+        const titleRow = document.createElement("div");
+        titleRow.className = "stream-card-title-row";
+
+        const title = document.createElement("div");
+        title.className = "stream-card-title";
+        title.innerText = usernameText + "'s stream";
+
+        const closeBtn = document.createElement("button");
+        closeBtn.className = "stream-close-btn";
+        closeBtn.innerText = "✕";
+
+        closeBtn.onclick = () => {
+            closeWatchedStream(id);
+        };
+
+        const video = document.createElement("video");
+        video.id = "video-" + id;
+        video.autoplay = true;
+        video.controls = true;
+        video.playsInline = true;
+        video.muted = false;
+
+        titleRow.appendChild(title);
+        titleRow.appendChild(closeBtn);
+
+        card.appendChild(titleRow);
+        card.appendChild(video);
+
+        grid.appendChild(card);
+    }
+
+    const video = document.getElementById("video-" + id);
+
+    const tracks = [videoTrack];
+
+    if (remoteStreamAudioTracks[id]) {
+        tracks.push(remoteStreamAudioTracks[id]);
+    }
+
+    video.srcObject = new MediaStream(tracks);
+
+    video.play().catch(() => {
+        console.log("Remote stream autoplay blocked. Click play on video.");
+    });
+}
 
 /* ================= ICE SERVERS ================= */
 const config = {
@@ -54,7 +371,7 @@ const config = {
     ]
 };
 
-/* ================= CHECK LOGIN ================= */
+/* ================= LOGIN CHECK ================= */
 async function checkLogin() {
     try {
         const res = await fetch("/api/me");
@@ -67,16 +384,10 @@ async function checkLogin() {
 
         loggedInUsername = data.username;
 
-        if (username) {
-            username.value = data.username;
-            username.readOnly = true;
-        }
+        username.value = data.username;
+        accountName.innerText = "Signed in as: " + data.username;
 
-        if (accountName) {
-            accountName.innerText = "Signed in as: " + data.username;
-        }
-
-        console.log("LOGGED IN AS:", data.username);
+        await loadServers();
 
     } catch (err) {
         console.error("LOGIN CHECK ERROR:", err);
@@ -91,8 +402,362 @@ socket.on("connect", () => {
     console.log("CONNECTED:", socket.id);
 });
 
-/* ================= ENABLE MIC ================= */
-voiceBtn.onclick = async () => {
+/* ================= SERVER API ================= */
+async function loadServers() {
+    const res = await fetch("/api/servers");
+    const data = await res.json();
+
+    if (!data.success) {
+        alert(data.message || "Could not load servers");
+        return;
+    }
+
+    servers = data.servers || [];
+
+    renderServerList();
+
+    // IMPORTANT:
+    // No automatic server selection after login.
+    // User must click the server manually.
+    showHomeView(false);
+}
+
+async function createServer() {
+    const name = prompt("Enter server name:");
+
+    if (!name) {
+        return;
+    }
+
+    const res = await fetch("/api/servers", {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+            name: name
+        })
+    });
+
+    const data = await res.json();
+
+    if (!data.success) {
+        alert(data.message || "Could not create server");
+        return;
+    }
+
+    await loadServers();
+
+    // After creating, user can still choose freely.
+    // We do not auto-open the server.
+    status.innerText = "Server created. Click it from the left side to open.";
+}
+
+async function joinServer() {
+    const inviteCode = prompt("Enter invite code:");
+
+    if (!inviteCode) {
+        return;
+    }
+
+    const res = await fetch("/api/servers/join", {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+            inviteCode: inviteCode
+        })
+    });
+
+    const data = await res.json();
+
+    if (!data.success) {
+        alert(data.message || "Could not join server");
+        return;
+    }
+
+    await loadServers();
+
+    // After joining by invite, user can still choose freely.
+    // We do not auto-open the server.
+    status.innerText = "Server joined. Click it from the left side to open.";
+}
+
+async function createVoiceChannel() {
+    if (!activeServer) {
+        alert("Select a server first");
+        return;
+    }
+
+    const name = prompt("Enter voice channel name:");
+
+    if (!name) {
+        return;
+    }
+
+    const res = await fetch(`/api/servers/${activeServer._id}/channels`, {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+            name: name,
+            type: "voice"
+        })
+    });
+
+    const data = await res.json();
+
+    if (!data.success) {
+        alert(data.message || "Could not create voice channel");
+        return;
+    }
+
+    activeServer = data.server;
+
+    servers = servers.map(server => {
+        if (server._id === activeServer._id) {
+            return activeServer;
+        }
+
+        return server;
+    });
+
+    renderChannels();
+}
+
+/* ================= HOME VIEW / SERVER UI ================= */
+function showHomeView(leaveVoice) {
+    if (leaveVoice) {
+        leaveCurrentVoice(false);
+    }
+
+    activeServer = null;
+    activeVoiceChannel = null;
+    currentVoiceUsers = [];
+
+    activeServerName.innerText = "Choose Server";
+    inviteCodeText.innerText = "---";
+
+    textChannelList.innerHTML = "";
+    voiceChannelList.innerHTML = "";
+    userList.innerHTML = "";
+
+    mainTitle.innerText = "NoxVoice";
+    mainSubtitle.innerText = "Choose a server from the left side, create a server, or join using invite code.";
+
+    serverInfoTitle.innerText = "No server selected";
+    serverInfoText.innerText = "Click a server icon from the left side to open it.";
+
+    voiceStatusTitle.innerText = "Voice Disconnected";
+    voiceStatusText.innerText = "Not connected to any channel";
+
+    status.innerText = "Choose a server";
+
+    renderServerList();
+}
+
+function renderServerList() {
+    serverList.innerHTML = "";
+
+    if (homeServerBtn) {
+        homeServerBtn.classList.toggle("active", !activeServer);
+    }
+
+    servers.forEach((server) => {
+        const div = document.createElement("div");
+
+        div.className = "server-icon";
+
+        if (activeServer && activeServer._id === server._id) {
+            div.classList.add("active");
+        }
+
+        div.title = server.name;
+        div.textContent = server.name.charAt(0).toUpperCase();
+
+        div.onclick = () => {
+            selectServer(server._id);
+        };
+
+        serverList.appendChild(div);
+    });
+}
+
+function selectServer(serverId) {
+    const found = servers.find(s => s._id === serverId);
+
+    if (!found) {
+        return;
+    }
+
+    leaveCurrentVoice(false);
+
+    activeServer = found;
+    activeVoiceChannel = null;
+    currentVoiceUsers = [];
+
+    activeServerName.innerText = activeServer.name;
+    inviteCodeText.innerText = activeServer.inviteCode;
+
+    mainTitle.innerText = activeServer.name;
+    mainSubtitle.innerText = "Click a voice channel to join automatically.";
+
+    serverInfoTitle.innerText = activeServer.name;
+    serverInfoText.innerText = "Invite code: " + activeServer.inviteCode;
+
+    renderServerList();
+    renderChannels();
+    renderCurrentUsers();
+
+    voiceStatusTitle.innerText = "Voice Disconnected";
+    voiceStatusText.innerText = "Not connected to any channel";
+
+    status.innerText = "Server opened: " + activeServer.name;
+}
+
+function renderLiveBadge(user) {
+    if (!(streamingUsers[user.id] || user.isStreaming)) {
+        return null;
+    }
+
+    const liveBadge = document.createElement("span");
+    liveBadge.className = "live-badge";
+    liveBadge.innerText = "LIVE";
+
+    return liveBadge;
+}
+
+function renderMutedIcon(user) {
+    if (!(mutedUsers[user.id] || user.isMuted)) {
+        return null;
+    }
+
+    const icon = document.createElement("span");
+    icon.className = "muted-mic-icon";
+    icon.title = "Muted";
+
+    return icon;
+}
+
+function renderChannels() {
+    textChannelList.innerHTML = "";
+    voiceChannelList.innerHTML = "";
+
+    if (!activeServer) {
+        return;
+    }
+
+    const textChannels = activeServer.channels.filter(ch => ch.type === "text");
+    const voiceChannels = activeServer.channels.filter(ch => ch.type === "voice");
+
+    textChannels.forEach((channel) => {
+        const div = document.createElement("div");
+
+        div.className = "text-channel";
+        div.textContent = "# " + channel.name;
+
+        textChannelList.appendChild(div);
+    });
+
+    voiceChannels.forEach((channel) => {
+        const wrapper = document.createElement("div");
+
+        const div = document.createElement("div");
+        div.className = "voice-channel";
+
+        if (activeVoiceChannel && activeVoiceChannel.id === channel.id) {
+            div.classList.add("active-voice");
+        }
+
+        div.innerHTML = `
+            <span>🔊 ${channel.name}</span>
+        `;
+
+        div.onclick = async () => {
+            await selectVoiceChannel(channel);
+        };
+
+        wrapper.appendChild(div);
+
+        if (activeVoiceChannel && activeVoiceChannel.id === channel.id) {
+            const usersBox = document.createElement("div");
+            usersBox.className = "voice-users";
+
+            currentVoiceUsers.forEach((user) => {
+                const userDiv = document.createElement("div");
+                userDiv.className = "voice-user-row";
+
+                const nameSpan = document.createElement("span");
+                nameSpan.textContent =
+                    user.username + (user.id === socket.id ? " (You)" : "");
+
+                userDiv.appendChild(nameSpan);
+
+                const liveBadge = renderLiveBadge(user);
+
+                if (liveBadge) {
+                    userDiv.appendChild(liveBadge);
+                }
+
+                const muteIcon = renderMutedIcon(user);
+
+                if (muteIcon) {
+                    userDiv.appendChild(muteIcon);
+                }
+
+                if (user.id !== socket.id) {
+                    userDiv.title = "Click LIVE user to watch stream, or right click for volume";
+
+                    userDiv.onclick = (event) => {
+                        if (streamingUsers[user.id] || user.isStreaming) {
+                            showUserVolumeMenu(event, user);
+                        }
+                    };
+
+                    userDiv.oncontextmenu = (event) => {
+                        showUserVolumeMenu(event, user);
+                    };
+                }
+
+                usersBox.appendChild(userDiv);
+            });
+
+            wrapper.appendChild(usersBox);
+        }
+
+        voiceChannelList.appendChild(wrapper);
+    });
+}
+
+/* ================= AUTO JOIN VOICE CHANNEL ================= */
+async function selectVoiceChannel(channel) {
+    unlockSound();
+
+    activeVoiceChannel = channel;
+
+    renderChannels();
+
+    mainSubtitle.innerText = "Joining voice channel: " + channel.name;
+    status.innerText = "Joining: " + channel.name;
+
+    const micOk = await enableMicIfNeeded();
+
+    if (!micOk) {
+        status.innerText = "Mic permission is needed to join voice";
+        return;
+    }
+
+    joinSelectedVoiceChannel();
+}
+
+/* ================= MIC ================= */
+async function enableMicIfNeeded() {
+    if (micReady && localStream) {
+        return true;
+    }
+
     try {
         localStream = await navigator.mediaDevices.getUserMedia({
             audio: {
@@ -105,21 +770,106 @@ voiceBtn.onclick = async () => {
 
         micReady = true;
 
-        console.log("MIC READY");
-
         status.innerText = "Mic ON 🎤";
 
         Object.values(peers).forEach((peer) => {
             addMicTracksToPeer(peer);
         });
 
+        return true;
+
     } catch (err) {
         console.error("MIC ERROR:", err);
         alert("Microphone permission denied");
+        return false;
     }
+}
+
+voiceBtn.onclick = async () => {
+    await enableMicIfNeeded();
 };
 
-/* ================= SELF MUTE BUTTON ================= */
+/* ================= JOIN VOICE CHANNEL ================= */
+joinBtn.onclick = () => {
+    joinSelectedVoiceChannel();
+};
+
+function joinSelectedVoiceChannel() {
+    if (!activeServer) {
+        alert("Select a server first");
+        return;
+    }
+
+    if (!activeVoiceChannel) {
+        alert("Select a voice channel first");
+        return;
+    }
+
+    if (!micReady) {
+        alert("Enable mic first");
+        return;
+    }
+
+    resetRemoteMediaAndPeers();
+
+    currentVoiceUsers = [];
+    renderCurrentUsers();
+
+    socket.emit("join-voice-channel", {
+        serverId: activeServer._id,
+        channelId: activeVoiceChannel.id
+    });
+
+    if (isStreaming) {
+        setTimeout(() => {
+            socket.emit("stream-status", {
+                isStreaming: true
+            });
+        }, 300);
+    }
+
+    setTimeout(() => {
+        socket.emit("mute-status", {
+            isMuted: muted
+        });
+    }, 300);
+
+    playUserJoinSound();
+
+    hasJoinedVoice = true;
+
+    status.innerText = "Joined voice: " + activeVoiceChannel.name;
+
+    voiceStatusTitle.innerText = "Voice Connected";
+    voiceStatusText.innerText = activeVoiceChannel.name + " / " + activeServer.name;
+}
+
+/* ================= LEAVE VOICE ================= */
+leaveVoiceBtn.onclick = () => {
+    playUserLeaveSound();
+    leaveCurrentVoice(true);
+};
+
+function leaveCurrentVoice(updateUi) {
+    socket.emit("leave-voice-channel");
+
+    resetRemoteMediaAndPeers();
+
+    currentVoiceUsers = [];
+    hasJoinedVoice = false;
+
+    if (updateUi) {
+        status.innerText = "Left voice channel";
+
+        voiceStatusTitle.innerText = "Voice Disconnected";
+        voiceStatusText.innerText = "Not connected to any channel";
+
+        renderChannels();
+        renderCurrentUsers();
+    }
+}
+
+/* ================= SELF MUTE ================= */
 muteBtn.onclick = () => {
     if (!localStream) {
         alert("Enable mic first");
@@ -132,6 +882,26 @@ muteBtn.onclick = () => {
         track.enabled = !muted;
     });
 
+    mutedUsers[socket.id] = muted;
+
+    socket.emit("mute-status", {
+        isMuted: muted
+    });
+
+    currentVoiceUsers = currentVoiceUsers.map(user => {
+        if (user.id === socket.id) {
+            return {
+                ...user,
+                isMuted: muted
+            };
+        }
+
+        return user;
+    });
+
+    renderChannels();
+    renderCurrentUsers();
+
     if (muted) {
         status.innerText = "You are muted 🔇";
         muteBtn.innerText = "🔊 Unmute";
@@ -142,35 +912,12 @@ muteBtn.onclick = () => {
 };
 
 /* ================= LOGOUT ================= */
-if (logoutBtn) {
-    logoutBtn.onclick = async () => {
-        await fetch("/api/logout", {
-            method: "POST"
-        });
-
-        window.location.href = "/login.html";
-    };
-}
-
-/* ================= JOIN ROOM ================= */
-joinBtn.onclick = () => {
-    const room = roomCode.value.trim();
-
-    if (!room) {
-        alert("Enter room code");
-        return;
-    }
-
-    if (!micReady) {
-        alert("Enable mic first");
-        return;
-    }
-
-    socket.emit("join-room", {
-        room: room
+logoutBtn.onclick = async () => {
+    await fetch("/api/logout", {
+        method: "POST"
     });
 
-    status.innerText = "Joined room: " + room;
+    window.location.href = "/login.html";
 };
 
 /* ================= TRACK HELPERS ================= */
@@ -254,14 +1001,13 @@ function getStreamsGrid() {
         grid = document.createElement("div");
         grid.id = "streamsGrid";
 
-        const content = document.querySelector(".content") || document.body;
+        const content = document.querySelector(".content-area") || document.body;
         content.appendChild(grid);
     }
 
     return grid;
 }
 
-/* ================= LOCAL SCREEN PREVIEW ================= */
 function showLocalScreenPreview(stream) {
     const grid = getStreamsGrid();
 
@@ -279,7 +1025,7 @@ function showLocalScreenPreview(stream) {
         const video = document.createElement("video");
         video.id = "video-local";
         video.autoplay = true;
-        video.muted = true; // Prevent echo from your own stream audio
+        video.muted = true;
         video.controls = true;
         video.playsInline = true;
 
@@ -305,27 +1051,17 @@ function removeLocalScreenPreview() {
     }
 }
 
-/* ================= START / STOP SCREEN STREAM ================= */
-if (streamBtn) {
-    streamBtn.onclick = async () => {
-        if (!isStreaming) {
-            await startScreenStream();
-        } else {
-            await stopScreenStream();
-        }
-    };
-}
+/* ================= SCREEN STREAM ================= */
+streamBtn.onclick = async () => {
+    if (!isStreaming) {
+        await startScreenStream();
+    } else {
+        await stopScreenStream();
+    }
+};
 
 async function startScreenStream() {
     try {
-        /*
-            This captures:
-            - screen video
-            - stream/system audio
-
-            It does NOT replace localStream.
-            Your microphone remains separate.
-        */
         screenStream = await navigator.mediaDevices.getDisplayMedia({
             video: true,
             audio: true
@@ -340,13 +1076,20 @@ async function startScreenStream() {
 
         isStreaming = true;
 
-        if (streamBtn) {
-            streamBtn.innerText = "🛑 Stop Stream";
-        }
+        streamingUsers[socket.id] = true;
+
+        socket.emit("stream-status", {
+            isStreaming: true
+        });
+
+        streamBtn.innerText = "🛑 Stop Stream";
 
         status.innerText = "Screen streaming with audio 🖥️🔊";
 
         showLocalScreenPreview(screenStream);
+
+        renderChannels();
+        renderCurrentUsers();
 
         Object.keys(peers).forEach(async (id) => {
             const peer = peers[id];
@@ -360,8 +1103,6 @@ async function startScreenStream() {
             await stopScreenStream();
         };
 
-        console.log("SCREEN STREAM WITH AUDIO STARTED");
-
     } catch (err) {
         console.error("SCREEN STREAM ERROR:", err);
         alert("Screen stream cancelled or blocked");
@@ -374,6 +1115,15 @@ async function stopScreenStream() {
     }
 
     isStreaming = false;
+
+    streamingUsers[socket.id] = false;
+
+    socket.emit("stream-status", {
+        isStreaming: false
+    });
+
+    renderChannels();
+    renderCurrentUsers();
 
     Object.keys(peers).forEach(async (id) => {
         const peer = peers[id];
@@ -394,16 +1144,12 @@ async function stopScreenStream() {
 
     removeLocalScreenPreview();
 
-    if (streamBtn) {
-        streamBtn.innerText = "🖥️ Start Stream";
-    }
+    streamBtn.innerText = "🖥️ Start Stream";
 
     status.innerText = "Screen stream stopped";
-
-    console.log("SCREEN STREAM STOPPED");
 }
 
-/* ================= CREATE PEER ================= */
+/* ================= PEER ================= */
 function createPeer(id) {
     if (peers[id]) {
         return peers[id];
@@ -412,8 +1158,6 @@ function createPeer(id) {
     const peer = new RTCPeerConnection(config);
 
     peers[id] = peer;
-
-    console.log("CREATING PEER:", id);
 
     peer.onicecandidate = (event) => {
         if (event.candidate) {
@@ -425,10 +1169,7 @@ function createPeer(id) {
     };
 
     peer.oniceconnectionstatechange = () => {
-        console.log(
-            "ICE STATE [" + id + "]:",
-            peer.iceConnectionState
-        );
+        console.log("ICE STATE [" + id + "]:", peer.iceConnectionState);
     };
 
     peer.ontrack = (event) => {
@@ -454,6 +1195,27 @@ function createPeer(id) {
 
 /* ================= REMOTE AUDIO ================= */
 function handleRemoteAudio(id, event) {
+    const hasVideoInSameStream =
+        event.streams &&
+        event.streams[0] &&
+        event.streams[0].getVideoTracks().length > 0;
+
+    if (hasVideoInSameStream) {
+        remoteStreamAudioTracks[id] = event.track;
+
+        const user = currentVoiceUsers.find(u => u.id === id);
+
+        if (watchingStreams[id] && user) {
+            showRemoteStream(id, user.username);
+        }
+
+        event.track.onended = () => {
+            delete remoteStreamAudioTracks[id];
+        };
+
+        return;
+    }
+
     const audioId = "audio-" + id + "-" + event.track.id;
 
     let audio = document.getElementById(audioId);
@@ -479,8 +1241,6 @@ function handleRemoteAudio(id, event) {
     applyUserAudioSettings(id);
 
     audio.play().catch(() => {
-        console.log("Audio autoplay blocked. Click the page once.");
-
         document.body.addEventListener(
             "click",
             () => {
@@ -510,57 +1270,37 @@ function applyUserAudioSettings(id) {
 
 /* ================= REMOTE VIDEO ================= */
 function handleRemoteVideo(id, event) {
-    const grid = getStreamsGrid();
+    remoteVideoTracks[id] = event.track;
 
-    let card = document.getElementById("stream-card-" + id);
+    const user = currentVoiceUsers.find(u => u.id === id);
 
-    if (!card) {
-        card = document.createElement("div");
-        card.id = "stream-card-" + id;
-        card.className = "stream-card";
-
-        const title = document.createElement("div");
-        title.className = "stream-card-title";
-        title.innerText = "Screen stream from user";
-
-        const video = document.createElement("video");
-        video.id = "video-" + id;
-        video.autoplay = true;
-        video.controls = true;
-        video.playsInline = true;
-        video.muted = true; // Audio is handled separately by audio tracks
-
-        card.appendChild(title);
-        card.appendChild(video);
-        grid.appendChild(card);
+    if (watchingStreams[id] && user) {
+        showRemoteStream(id, user.username);
     }
 
-    const video = document.getElementById("video-" + id);
-
-    const videoOnlyStream = new MediaStream([event.track]);
-
-    video.srcObject = videoOnlyStream;
-
-    video.play().catch(() => {
-        console.log("Remote video autoplay blocked");
-    });
-
     event.track.onended = () => {
-        const oldCard = document.getElementById("stream-card-" + id);
+        delete remoteVideoTracks[id];
+        delete remoteStreamAudioTracks[id];
 
-        if (oldCard) {
-            oldCard.remove();
+        const card = document.getElementById("stream-card-" + id);
+
+        if (card) {
+            card.remove();
         }
+
+        watchingStreams[id] = false;
     };
 }
 
-/* ================= USER JOINED ================= */
+/* ================= SOCKET VOICE EVENTS ================= */
 socket.on("user-joined", async (user) => {
-    if (!micReady) {
+    if (user.id === socket.id) {
         return;
     }
 
-    if (user.id === socket.id) {
+    playUserJoinSound();
+
+    if (!micReady) {
         return;
     }
 
@@ -581,7 +1321,59 @@ socket.on("user-joined", async (user) => {
     }
 });
 
-/* ================= OFFER RECEIVED ================= */
+socket.on("user-left", ({ id }) => {
+    if (id !== socket.id) {
+        playUserLeaveSound();
+    }
+
+    delete streamingUsers[id];
+    delete mutedUsers[id];
+
+    removePeerAndMedia(id);
+});
+
+socket.on("user-stream-status", ({ id, isStreaming }) => {
+    streamingUsers[id] = !!isStreaming;
+
+    currentVoiceUsers = currentVoiceUsers.map(user => {
+        if (user.id === id) {
+            return {
+                ...user,
+                isStreaming: !!isStreaming
+            };
+        }
+
+        return user;
+    });
+
+    if (!isStreaming) {
+        closeWatchedStream(id);
+        delete remoteVideoTracks[id];
+        delete remoteStreamAudioTracks[id];
+    }
+
+    renderChannels();
+    renderCurrentUsers();
+});
+
+socket.on("user-mute-status", ({ id, isMuted }) => {
+    mutedUsers[id] = !!isMuted;
+
+    currentVoiceUsers = currentVoiceUsers.map(user => {
+        if (user.id === id) {
+            return {
+                ...user,
+                isMuted: !!isMuted
+            };
+        }
+
+        return user;
+    });
+
+    renderChannels();
+    renderCurrentUsers();
+});
+
 socket.on("offer", async ({ sender, offer }) => {
     const peer = createPeer(sender);
 
@@ -602,7 +1394,6 @@ socket.on("offer", async ({ sender, offer }) => {
     }
 });
 
-/* ================= ANSWER RECEIVED ================= */
 socket.on("answer", async ({ sender, answer }) => {
     const peer = peers[sender];
 
@@ -618,7 +1409,6 @@ socket.on("answer", async ({ sender, answer }) => {
     }
 });
 
-/* ================= ICE RECEIVED ================= */
 socket.on("ice", async ({ sender, candidate }) => {
     const peer = peers[sender];
 
@@ -634,78 +1424,116 @@ socket.on("ice", async ({ sender, candidate }) => {
     }
 });
 
-/* ================= USER LIST WITH MUTE + VOLUME ================= */
+socket.on("voice-user-list", (users) => {
+    currentVoiceUsers = users || [];
+
+    currentVoiceUsers.forEach(user => {
+        streamingUsers[user.id] = !!user.isStreaming;
+        mutedUsers[user.id] = !!user.isMuted;
+    });
+
+    renderChannels();
+    renderCurrentUsers();
+});
+
 socket.on("user-list", (users) => {
+    currentVoiceUsers = users || [];
+
+    currentVoiceUsers.forEach(user => {
+        streamingUsers[user.id] = !!user.isStreaming;
+        mutedUsers[user.id] = !!user.isMuted;
+    });
+
+    renderChannels();
+    renderCurrentUsers();
+});
+
+socket.on("join-error", (data) => {
+    alert(data.message || "Could not join voice channel");
+});
+
+/* ================= USER LIST ================= */
+function renderCurrentUsers() {
     userList.innerHTML = "";
 
-    users.forEach((u) => {
+    currentVoiceUsers.forEach((u) => {
         const li = document.createElement("li");
         li.className = "user-item";
+
+        if (u.id !== socket.id) {
+            li.title = "Click LIVE user to watch stream, or right click for volume";
+
+            li.onclick = (event) => {
+                if (streamingUsers[u.id] || u.isStreaming) {
+                    showUserVolumeMenu(event, u);
+                }
+            };
+
+            li.oncontextmenu = (event) => {
+                showUserVolumeMenu(event, u);
+            };
+        }
 
         const name = document.createElement("span");
         name.className = "user-name";
 
-        if (u.id === socket.id) {
-            name.textContent = u.username + " (You)";
-        } else {
-            name.textContent = u.username;
+        const nameText = document.createElement("span");
+        nameText.textContent = u.username + (u.id === socket.id ? " (You)" : "");
+
+        name.appendChild(nameText);
+
+        const liveBadge = renderLiveBadge(u);
+
+        if (liveBadge) {
+            name.appendChild(liveBadge);
         }
 
-        const controls = document.createElement("div");
-        controls.className = "user-controls";
+        const muteIcon = renderMutedIcon(u);
 
-        const userMuteBtn = document.createElement("button");
-        userMuteBtn.className = "user-mute-btn";
-        userMuteBtn.textContent = "🔇";
-        userMuteBtn.title = "Mute this user";
-
-        const volumeSlider = document.createElement("input");
-        volumeSlider.className = "user-volume-slider";
-        volumeSlider.type = "range";
-        volumeSlider.min = "0";
-        volumeSlider.max = "1";
-        volumeSlider.step = "0.01";
-        volumeSlider.value = userVolumes[u.id] ?? 1;
-        volumeSlider.title = "User volume";
-
-        if (u.id === socket.id) {
-            userMuteBtn.disabled = true;
-            volumeSlider.disabled = true;
-        } else {
-            if (userMuted[u.id]) {
-                userMuteBtn.textContent = "🔊";
-                userMuteBtn.classList.add("user-muted");
-            }
-
-            userMuteBtn.onclick = () => {
-                userMuted[u.id] = !userMuted[u.id];
-
-                applyUserAudioSettings(u.id);
-
-                if (userMuted[u.id]) {
-                    userMuteBtn.textContent = "🔊";
-                    userMuteBtn.title = "Unmute this user";
-                    userMuteBtn.classList.add("user-muted");
-                } else {
-                    userMuteBtn.textContent = "🔇";
-                    userMuteBtn.title = "Mute this user";
-                    userMuteBtn.classList.remove("user-muted");
-                }
-            };
-
-            volumeSlider.oninput = () => {
-                userVolumes[u.id] = Number(volumeSlider.value);
-
-                applyUserAudioSettings(u.id);
-            };
+        if (muteIcon) {
+            name.appendChild(muteIcon);
         }
-
-        controls.appendChild(userMuteBtn);
-        controls.appendChild(volumeSlider);
 
         li.appendChild(name);
-        li.appendChild(controls);
-
         userList.appendChild(li);
     });
-});
+}
+
+/* ================= CLEANUP ================= */
+function removePeerAndMedia(id) {
+    if (peers[id]) {
+        peers[id].close();
+        delete peers[id];
+    }
+
+    document.querySelectorAll(".remote-audio-" + id).forEach(el => el.remove());
+
+    const videoCard = document.getElementById("stream-card-" + id);
+
+    if (videoCard) {
+        videoCard.remove();
+    }
+
+    delete remoteVideoTracks[id];
+    delete remoteStreamAudioTracks[id];
+    delete watchingStreams[id];
+    delete streamingUsers[id];
+    delete mutedUsers[id];
+}
+
+function resetRemoteMediaAndPeers() {
+    Object.keys(peers).forEach((id) => {
+        removePeerAndMedia(id);
+    });
+}
+
+/* ================= BUTTONS ================= */
+createServerBtn.onclick = createServer;
+joinServerBtn.onclick = joinServer;
+createVoiceChannelBtn.onclick = createVoiceChannel;
+
+if (homeServerBtn) {
+    homeServerBtn.onclick = () => {
+        showHomeView(true);
+    };
+}

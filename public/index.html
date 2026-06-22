@@ -9,55 +9,124 @@
 
 <body>
 
-<div class="app">
+<div class="discord-layout">
 
-    <div class="sidebar">
+    <!-- LEFT SERVER BAR -->
+    <div class="server-bar">
 
-        <div class="title">🎧 NoxVoice</div>
+        <div class="server-icon home active" title="NoxVoice">
+            🎧
+        </div>
 
-        <p id="accountName">Loading...</p>
+        <div id="serverList" class="server-list"></div>
 
-        <input id="username" placeholder="Username" readonly>
-        <input id="roomCode" placeholder="Room Code">
+        <button id="createServerBtn" class="server-icon add" title="Create Server">
+            +
+        </button>
 
-        <button id="voiceBtn">🎤 Enable Mic</button>
-        <button id="joinBtn">Join Room</button>
-        <button id="muteBtn">🔇 Mute</button>
-
-        <!-- KEEP ONLY THIS ONE STREAM BUTTON -->
-        <button id="streamBtn">🖥️ Start Stream</button>
-
-        <button id="logoutBtn">Logout</button>
-
-        <p id="status">Offline</p>
-
-        <div class="divider"></div>
-
-        <h3>Connected Users</h3>
-        <ul id="userList"></ul>
+        <button id="joinServerBtn" class="server-icon join" title="Join Server">
+            🔗
+        </button>
 
     </div>
 
-    <div class="main">
+    <!-- CHANNEL SIDEBAR -->
+    <div class="channel-sidebar">
 
-        <div class="header">
-            Live Voice Room
+        <div class="server-title">
+            <span id="activeServerName">Select Server</span>
+            <span>⌄</span>
         </div>
 
-        <div class="content">
+        <div class="account-box" id="accountName">
+            Signed in as: Loading...
+        </div>
 
-            <p>Enable mic first, join a room, then start streaming if needed.</p>
+        <input id="username" placeholder="Username" readonly>
+
+        <div id="inviteBox" class="invite-box">
+            Invite Code: <span id="inviteCodeText">---</span>
+        </div>
+
+        <div class="channel-section">
+            <div class="section-title">TEXT CHANNELS</div>
+            <div id="textChannelList"></div>
+        </div>
+
+        <div class="channel-section">
+            <div class="section-title">
+                VOICE CHANNELS
+                <button id="createVoiceChannelBtn" class="small-plus">+</button>
+            </div>
+
+            <div id="voiceChannelList"></div>
+        </div>
+
+    </div>
+
+    <!-- MAIN AREA -->
+    <div class="main-area">
+
+        <div class="top-header">
+            <div>
+                <h2 id="mainTitle">Live Voice Room</h2>
+                <p id="mainSubtitle">Create or select a server, then join a voice channel.</p>
+            </div>
+        </div>
+
+        <div class="content-area">
 
             <h3>Room Streams</h3>
 
-            <!-- STREAM OUTPUT WILL APPEAR HERE -->
             <div id="streamsGrid"></div>
 
         </div>
 
     </div>
 
+    <!-- RIGHT MEMBERS PANEL -->
+    <div class="members-panel">
+
+        <div class="members-title">CONNECTED USERS</div>
+
+        <ul id="userList"></ul>
+
+        <div class="members-title">SERVER INFO</div>
+
+        <div class="info-card">
+            <p id="serverInfoTitle">No server selected</p>
+            <small id="serverInfoText">Create or join a server first.</small>
+        </div>
+
+    </div>
+
 </div>
+
+<!-- BOTTOM VOICE STATUS BAR -->
+<div class="bottom-voice-bar">
+
+    <div class="voice-status-left">
+        <div class="signal-icon">📶</div>
+        <div>
+            <strong id="voiceStatusTitle">Voice Disconnected</strong>
+            <p id="voiceStatusText">Not connected to any channel</p>
+        </div>
+    </div>
+
+    <div class="voice-actions">
+
+        <button id="voiceBtn">🎤 Enable Mic</button>
+        <button id="joinBtn">Join Selected Voice</button>
+        <button id="muteBtn">🔇 Mute</button>
+        <button id="streamBtn">🖥️ Start Stream</button>
+        <button id="leaveVoiceBtn">Leave</button>
+        <button id="logoutBtn">Logout</button>
+
+    </div>
+
+</div>
+
+<p id="status" class="floating-status">Offline</p>
 
 <script src="/socket.io/socket.io.js"></script>
 <script src="app.js"></script>
