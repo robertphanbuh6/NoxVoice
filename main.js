@@ -5,6 +5,8 @@ app.commandLine.appendSwitch("autoplay-policy", "no-user-gesture-required");
 
 let mainWindow;
 
+const APP_URL = "https://noxvoice.onrender.com";
+
 function createWindow() {
     mainWindow = new BrowserWindow({
         width: 1200,
@@ -58,11 +60,47 @@ function createWindow() {
         }
     );
 
-    // Force fresh online version, prevents old cached app.js in EXE
-    session.defaultSession.clearCache().then(() => {
-        const freshUrl = "https://noxvoice.onrender.com?desktop=" + Date.now();
+    // Force no-cache request headers
+    session.defaultSession.webRequest.onBeforeSendHeaders((details, callback) => {
+        details.requestHeaders["Cache-Control"] = "no-cache, no-store, must-revalidate";
+        details.requestHeaders["Pragma"] = "no-cache";
+        details.requestHeaders["Expires"] = "0";
+
+        callback({
+            requestHeaders: details.requestHeaders
+        });
+    });
+
+    // Force no-cache response headers
+    session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+        const responseHeaders = details.responseHeaders || {};
+
+        responseHeaders["Cache-Control"] = ["no-cache, no-store, must-revalidate"];
+        responseHeaders["Pragma"] = ["no-cache"];
+        responseHeaders["Expires"] = ["0"];
+
+        callback({
+            responseHeaders: responseHeaders
+        });
+    });
+
+    // Clear Electron cache before loading app
+    Promise.all([
+        session.defaultSession.clearCache(),
+        session.defaultSession.clearCodeCaches()
+    ]).then(() => {
+        const freshUrl = APP_URL + "/index.html?desktopFresh=" + Date.now();
 
         mainWindow.loadURL(freshUrl);
+    });
+
+    // TEMPORARY DEBUG: opens DevTools so we can see why button fails
+    mainWindow.webContents.once("did-finish-load", () => {
+        mainWindow.webContents.openDevTools({
+            mode: "detach"
+        });
+
+        console.log("NoxVoice EXE loaded fresh:", APP_URL);
     });
 
     mainWindow.on("closed", () => {
