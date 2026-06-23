@@ -1,4 +1,4 @@
-console.log("NOXVOICE APP LOADED - FIX STALE CHANNEL USERS");
+console.log("NOXVOICE APP LOADED - SPEAKING GLOW INDICATOR");
 
 const socket = io();
 
@@ -59,6 +59,7 @@ const userVolumes = {};
 const userMuted = {};
 const streamingUsers = {};
 const mutedUsers = {};
+const speakingUsers = {};
 
 const remoteVideoTracks = {};
 const remoteStreamAudioTracks = {};
@@ -195,6 +196,7 @@ async function refreshServerChannelUsers() {
             users.forEach((user) => {
                 streamingUsers[user.id] = !!user.isStreaming;
                 mutedUsers[user.id] = !!user.isMuted;
+                speakingUsers[user.id] = !!user.isSpeaking;
             });
         });
 
@@ -275,6 +277,131 @@ function playUserLeaveSound() {
     setTimeout(() => {
         playTone(330, 0.15, "sine", 0.18);
     }, 120);
+}
+
+/* ================= SPEAKING DETECTION ================= */
+
+let speakingAudioContext = null;
+let speakingAnalyser = null;
+let speakingDataArray = null;
+let speakingAnimationFrame = null;
+let lastSpeakingState = false;
+let lastLoudTime = 0;
+
+function startSpeakingDetection() {
+    stopSpeakingDetection();
+
+    if (!localStream) {
+        return;
+    }
+
+    try {
+        speakingAudioContext = new (window.AudioContext || window.webkitAudioContext)();
+        const source = speakingAudioContext.createMediaStreamSource(localStream);
+
+        speakingAnalyser = speakingAudioContext.createAnalyser();
+        speakingAnalyser.fftSize = 512;
+        speakingAnalyser.smoothingTimeConstant = 0.35;
+
+        source.connect(speakingAnalyser);
+
+        speakingDataArray = new Uint8Array(speakingAnalyser.fftSize);
+
+        detectSpeakingLoop();
+
+    } catch (err) {
+        console.error("Speaking detection error:", err);
+    }
+}
+
+function stopSpeakingDetection() {
+    if (speakingAnimationFrame) {
+        cancelAnimationFrame(speakingAnimationFrame);
+        speakingAnimationFrame = null;
+    }
+
+    if (speakingAudioContext) {
+        speakingAudioContext.close().catch(() => {});
+        speakingAudioContext = null;
+    }
+
+    speakingAnalyser = null;
+    speakingDataArray = null;
+
+    setSpeakingState(false);
+}
+
+function setSpeakingState(isSpeakingNow) {
+    if (lastSpeakingState === isSpeakingNow) {
+        return;
+    }
+
+    lastSpeakingState = isSpeakingNow;
+    speakingUsers[socket.id] = isSpeakingNow;
+
+    socket.emit("speaking-status", {
+        isSpeaking: isSpeakingNow
+    });
+
+    currentVoiceUsers = currentVoiceUsers.map(user => {
+        if (user.id === socket.id) {
+            return {
+                ...user,
+                isSpeaking: isSpeakingNow
+            };
+        }
+
+        return user;
+    });
+
+    if (activeVoiceChannel && serverChannelUsers[activeVoiceChannel.id]) {
+        serverChannelUsers[activeVoiceChannel.id] =
+            serverChannelUsers[activeVoiceChannel.id].map(user => {
+                if (user.id === socket.id) {
+                    return {
+                        ...user,
+                        isSpeaking: isSpeakingNow
+                    };
+                }
+
+                return user;
+            });
+    }
+
+    renderChannels();
+    renderCurrentUsers();
+}
+
+function detectSpeakingLoop() {
+    if (!speakingAnalyser || !speakingDataArray) {
+        return;
+    }
+
+    speakingAnalyser.getByteTimeDomainData(speakingDataArray);
+
+    let sum = 0;
+
+    for (let i = 0; i < speakingDataArray.length; i++) {
+        const value = speakingDataArray[i] - 128;
+        sum += value * value;
+    }
+
+    const rms = Math.sqrt(sum / speakingDataArray.length);
+
+    const speakingThreshold = 10;
+    const stopDelayMs = 550;
+    const now = Date.now();
+
+    if (!muted && hasJoinedVoice && rms > speakingThreshold) {
+        lastLoudTime = now;
+        setSpeakingState(true);
+    } else {
+        if (now - lastLoudTime > stopDelayMs) {
+            setSpeakingState(false);
+        }
+    }
+
+    speakingAnimationFrame = requestAnimationFrame(detectSpeakingLoop);
 }
 
 /* ================= USER MENU ================= */
@@ -829,6 +956,10 @@ function renderUserRowForChannel(user, channelId) {
     const userDiv = document.createElement("div");
     userDiv.className = "voice-user-row";
 
+    if (speakingUsers[user.id] || user.isSpeaking) {
+        userDiv.classList.add("speaking-user");
+    }
+
     const nameSpan = document.createElement("span");
     nameSpan.textContent =
         user.username + (user.id === socket.id ? " (You)" : "");
@@ -973,6 +1104,8 @@ async function enableMicIfNeeded() {
             addMicTracksToPeer(peer);
         });
 
+        startSpeakingDetection();
+
         return true;
 
     } catch (err) {
@@ -1035,6 +1168,8 @@ function joinSelectedVoiceChannel() {
         refreshServerChannelUsers();
     }, 500);
 
+    startSpeakingDetection();
+
     playUserJoinSound();
 
     hasJoinedVoice = true;
@@ -1052,6 +1187,12 @@ leaveVoiceBtn.onclick = () => {
 };
 
 function leaveCurrentVoice(updateUi) {
+    socket.emit("speaking-status", {
+        isSpeaking: false
+    });
+
+    setSpeakingState(false);
+
     socket.emit("leave-voice-channel");
 
     setTimeout(() => {
@@ -1089,6 +1230,10 @@ muteBtn.onclick = () => {
 
     mutedUsers[socket.id] = muted;
 
+    if (muted) {
+        setSpeakingState(false);
+    }
+
     socket.emit("mute-status", {
         isMuted: muted
     });
@@ -1097,7 +1242,8 @@ muteBtn.onclick = () => {
         if (user.id === socket.id) {
             return {
                 ...user,
-                isMuted: muted
+                isMuted: muted,
+                isSpeaking: muted ? false : user.isSpeaking
             };
         }
 
@@ -1119,6 +1265,7 @@ muteBtn.onclick = () => {
 /* ================= LOGOUT ================= */
 logoutBtn.onclick = async () => {
     stopChannelUserRefresh();
+    stopSpeakingDetection();
 
     await fetch("/api/logout", {
         method: "POST"
@@ -1535,6 +1682,7 @@ socket.on("user-left", ({ id }) => {
 
     delete streamingUsers[id];
     delete mutedUsers[id];
+    delete speakingUsers[id];
 
     removePeerAndMedia(id);
 
@@ -1553,6 +1701,7 @@ socket.on("voice-joined-confirmed", ({ serverId, channelId, users }) => {
     currentVoiceUsers.forEach(user => {
         streamingUsers[user.id] = !!user.isStreaming;
         mutedUsers[user.id] = !!user.isMuted;
+        speakingUsers[user.id] = !!user.isSpeaking;
     });
 
     renderChannels();
@@ -1579,12 +1728,44 @@ socket.on("server-channel-users", ({ serverId, channels }) => {
         users.forEach((user) => {
             streamingUsers[user.id] = !!user.isStreaming;
             mutedUsers[user.id] = !!user.isMuted;
+            speakingUsers[user.id] = !!user.isSpeaking;
         });
     });
 
     if (activeVoiceChannel) {
         currentVoiceUsers = serverChannelUsers[activeVoiceChannel.id] || [];
     }
+
+    renderChannels();
+    renderCurrentUsers();
+});
+
+socket.on("user-speaking-status", ({ id, isSpeaking }) => {
+    speakingUsers[id] = !!isSpeaking;
+
+    currentVoiceUsers = currentVoiceUsers.map(user => {
+        if (user.id === id) {
+            return {
+                ...user,
+                isSpeaking: !!isSpeaking
+            };
+        }
+
+        return user;
+    });
+
+    Object.keys(serverChannelUsers).forEach((channelId) => {
+        serverChannelUsers[channelId] = serverChannelUsers[channelId].map(user => {
+            if (user.id === id) {
+                return {
+                    ...user,
+                    isSpeaking: !!isSpeaking
+                };
+            }
+
+            return user;
+        });
+    });
 
     renderChannels();
     renderCurrentUsers();
@@ -1630,11 +1811,16 @@ socket.on("user-stream-status", ({ id, isStreaming }) => {
 socket.on("user-mute-status", ({ id, isMuted }) => {
     mutedUsers[id] = !!isMuted;
 
+    if (isMuted) {
+        speakingUsers[id] = false;
+    }
+
     currentVoiceUsers = currentVoiceUsers.map(user => {
         if (user.id === id) {
             return {
                 ...user,
-                isMuted: !!isMuted
+                isMuted: !!isMuted,
+                isSpeaking: isMuted ? false : user.isSpeaking
             };
         }
 
@@ -1646,7 +1832,8 @@ socket.on("user-mute-status", ({ id, isMuted }) => {
             if (user.id === id) {
                 return {
                     ...user,
-                    isMuted: !!isMuted
+                    isMuted: !!isMuted,
+                    isSpeaking: isMuted ? false : user.isSpeaking
                 };
             }
 
@@ -1718,6 +1905,7 @@ socket.on("voice-user-list", (users) => {
     currentVoiceUsers.forEach(user => {
         streamingUsers[user.id] = !!user.isStreaming;
         mutedUsers[user.id] = !!user.isMuted;
+        speakingUsers[user.id] = !!user.isSpeaking;
     });
 
     if (activeVoiceChannel) {
@@ -1734,6 +1922,7 @@ socket.on("user-list", (users) => {
     currentVoiceUsers.forEach(user => {
         streamingUsers[user.id] = !!user.isStreaming;
         mutedUsers[user.id] = !!user.isMuted;
+        speakingUsers[user.id] = !!user.isSpeaking;
     });
 
     if (activeVoiceChannel) {
@@ -1755,6 +1944,10 @@ function renderCurrentUsers() {
     currentVoiceUsers.forEach((u) => {
         const li = document.createElement("li");
         li.className = "user-item";
+
+        if (speakingUsers[u.id] || u.isSpeaking) {
+            li.classList.add("speaking-user");
+        }
 
         if (u.id !== socket.id) {
             li.title = "Click LIVE user to watch stream, or right click for volume";
@@ -1815,6 +2008,7 @@ function removePeerAndMedia(id) {
     delete watchingStreams[id];
     delete streamingUsers[id];
     delete mutedUsers[id];
+    delete speakingUsers[id];
 }
 
 function resetRemoteMediaAndPeers() {

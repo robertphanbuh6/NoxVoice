@@ -686,7 +686,8 @@ function joinSocketToVoiceRoom(socket, roomName, serverId, channelId) {
         serverId: serverId,
         channelId: channelId,
         isStreaming: false,
-        isMuted: false
+        isMuted: false,
+        isSpeaking: false
     });
 
     updateVoiceRoomList(roomName);
@@ -856,6 +857,10 @@ io.on("connection", (socket) => {
 
         if (user) {
             user.isMuted = !!isMuted;
+
+            if (user.isMuted) {
+                user.isSpeaking = false;
+            }
         }
 
         io.to(room).emit("user-mute-status", {
@@ -864,7 +869,49 @@ io.on("connection", (socket) => {
             isMuted: !!isMuted
         });
 
+        if (isMuted) {
+            io.to(room).emit("user-speaking-status", {
+                id: socket.id,
+                username: socket.username,
+                isSpeaking: false
+            });
+        }
+
         updateVoiceRoomList(room);
+    });
+
+    socket.on("speaking-status", ({ isSpeaking }) => {
+        const room = socket.voiceRoom;
+
+        if (!room || !voiceRooms[room]) {
+            return;
+        }
+
+        const user = voiceRooms[room].find(
+            u => u.id === socket.id
+        );
+
+        if (!user) {
+            return;
+        }
+
+        const finalSpeaking = !!isSpeaking && !user.isMuted;
+
+        if (user.isSpeaking === finalSpeaking) {
+            return;
+        }
+
+        user.isSpeaking = finalSpeaking;
+
+        io.to(room).emit("user-speaking-status", {
+            id: socket.id,
+            username: socket.username,
+            isSpeaking: finalSpeaking
+        });
+
+        if (user.serverId && user.serverId !== "legacy") {
+            emitServerChannelUsers(user.serverId);
+        }
     });
 
     socket.on("offer", (data) => {

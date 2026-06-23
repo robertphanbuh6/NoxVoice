@@ -787,3 +787,32 @@ body {
 .nox-modal-ok:hover {
     background: #4752c4;
 }
+.speaking-user {
+    background: rgba(35, 165, 90, 0.16) !important;
+    border-radius: 8px;
+    box-shadow:
+        0 0 0 1px rgba(35, 165, 90, 0.65),
+        0 0 14px rgba(35, 165, 90, 0.75);
+    color: #ffffff !important;
+    animation: speakingGlow 1s infinite alternate;
+}
+
+.speaking-user .user-name,
+.speaking-user span {
+    color: #ffffff !important;
+    font-weight: 700;
+}
+
+@keyframes speakingGlow {
+    from {
+        box-shadow:
+            0 0 0 1px rgba(35, 165, 90, 0.45),
+            0 0 8px rgba(35, 165, 90, 0.45);
+    }
+
+    to {
+        box-shadow:
+            0 0 0 1px rgba(35, 165, 90, 0.95),
+            0 0 18px rgba(35, 165, 90, 0.95);
+    }
+}
