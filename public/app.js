@@ -1,4 +1,4 @@
-console.log("NOXVOICE APP LOADED - SPEAKING GLOW INDICATOR");
+console.log("NOXVOICE APP LOADED - SETTINGS AVATAR SHORTCUTS SPEAKING GLOW");
 
 const socket = io();
 
@@ -60,6 +60,7 @@ const userMuted = {};
 const streamingUsers = {};
 const mutedUsers = {};
 const speakingUsers = {};
+const userAvatars = {};
 
 const remoteVideoTracks = {};
 const remoteStreamAudioTracks = {};
@@ -67,6 +68,24 @@ const watchingStreams = {};
 
 let serverChannelUsers = {};
 let channelUserRefreshTimer = null;
+
+let allUsersMuted = false;
+let myAvatarData = "";
+let settingsButton = null;
+let settingsModal = null;
+let shortcutListenerReady = false;
+
+const defaultShortcuts = {
+    muteAll: "Ctrl+D",
+    startStream: "Ctrl+Shift+S",
+    endStream: "Ctrl+Shift+E",
+    muteMic: "Ctrl+M",
+    avatarSettings: "Ctrl+Shift+A"
+};
+
+let userShortcuts = {
+    ...defaultShortcuts
+};
 
 /* ================= CUSTOM INPUT MODAL ================= */
 function askInput(titleText, placeholderText) {
@@ -149,6 +168,542 @@ function askInput(titleText, placeholderText) {
     });
 }
 
+/* ================= SETTINGS / AVATAR / SHORTCUTS ================= */
+
+function loadShortcutSettings() {
+    try {
+        const saved = localStorage.getItem("noxvoice_shortcuts");
+
+        if (saved) {
+            const parsed = JSON.parse(saved);
+
+            userShortcuts = {
+                ...defaultShortcuts,
+                ...parsed
+            };
+        }
+    } catch (err) {
+        console.log("Shortcut load error:", err);
+    }
+}
+
+function saveShortcutSettings() {
+    localStorage.setItem("noxvoice_shortcuts", JSON.stringify(userShortcuts));
+}
+
+async function loadUserProfile() {
+    try {
+        const res = await fetch("/api/profile");
+        const data = await res.json();
+
+        if (!data.success) {
+            return;
+        }
+
+        myAvatarData = data.profile.avatarData || "";
+
+        if (socket.id) {
+            userAvatars[socket.id] = myAvatarData;
+        }
+
+        updateSettingsButtonAvatar();
+        renderChannels();
+        renderCurrentUsers();
+
+    } catch (err) {
+        console.log("Profile load error:", err);
+    }
+}
+
+function createSettingsButton() {
+    if (settingsButton) {
+        return;
+    }
+
+    settingsButton = document.createElement("button");
+    settingsButton.className = "settings-floating-btn";
+    settingsButton.title = "Settings";
+    settingsButton.innerHTML = "⚙️";
+
+    settingsButton.onclick = () => {
+        openSettingsModal();
+    };
+
+    document.body.appendChild(settingsButton);
+
+    updateSettingsButtonAvatar();
+}
+
+function updateSettingsButtonAvatar() {
+    if (!settingsButton) {
+        return;
+    }
+
+    if (myAvatarData) {
+        settingsButton.innerHTML = `<img src="${myAvatarData}" alt="avatar">`;
+    } else {
+        settingsButton.innerHTML = "⚙️";
+    }
+}
+
+function closeSettingsModal() {
+    if (settingsModal) {
+        settingsModal.remove();
+        settingsModal = null;
+    }
+}
+
+function openSettingsModal() {
+    closeSettingsModal();
+
+    settingsModal = document.createElement("div");
+    settingsModal.className = "settings-modal-overlay";
+
+    const box = document.createElement("div");
+    box.className = "settings-modal-box";
+
+    const titleRow = document.createElement("div");
+    titleRow.className = "settings-title-row";
+
+    const title = document.createElement("div");
+    title.className = "settings-modal-title";
+    title.innerText = "User Settings";
+
+    const closeBtn = document.createElement("button");
+    closeBtn.className = "settings-close-btn";
+    closeBtn.innerText = "✕";
+    closeBtn.onclick = closeSettingsModal;
+
+    titleRow.appendChild(title);
+    titleRow.appendChild(closeBtn);
+
+    const avatarSection = document.createElement("div");
+    avatarSection.className = "settings-section";
+
+    const avatarTitle = document.createElement("div");
+    avatarTitle.className = "settings-section-title";
+    avatarTitle.innerText = "Avatar";
+
+    const avatarPreview = document.createElement("div");
+    avatarPreview.className = "settings-avatar-preview";
+
+    if (myAvatarData) {
+        avatarPreview.innerHTML = `<img src="${myAvatarData}" alt="avatar">`;
+    } else {
+        avatarPreview.innerText = getInitials(loggedInUsername || "U");
+    }
+
+    const avatarInput = document.createElement("input");
+    avatarInput.type = "file";
+    avatarInput.accept = "image/*";
+    avatarInput.className = "settings-file-input";
+
+    const avatarBtn = document.createElement("button");
+    avatarBtn.className = "settings-main-btn";
+    avatarBtn.innerText = "Change Avatar";
+    avatarBtn.onclick = () => {
+        avatarInput.click();
+    };
+
+    const removeAvatarBtn = document.createElement("button");
+    removeAvatarBtn.className = "settings-secondary-btn";
+    removeAvatarBtn.innerText = "Remove Avatar";
+    removeAvatarBtn.onclick = async () => {
+        await saveAvatar("");
+        closeSettingsModal();
+        openSettingsModal();
+    };
+
+    avatarInput.onchange = async () => {
+        const file = avatarInput.files[0];
+
+        if (!file) {
+            return;
+        }
+
+        try {
+            const avatarData = await processAvatarFile(file);
+            await saveAvatar(avatarData);
+
+            closeSettingsModal();
+            openSettingsModal();
+
+        } catch (err) {
+            alert("Could not save avatar");
+            console.error(err);
+        }
+    };
+
+    const avatarButtons = document.createElement("div");
+    avatarButtons.className = "settings-button-row";
+    avatarButtons.appendChild(avatarBtn);
+    avatarButtons.appendChild(removeAvatarBtn);
+
+    avatarSection.appendChild(avatarTitle);
+    avatarSection.appendChild(avatarPreview);
+    avatarSection.appendChild(avatarInput);
+    avatarSection.appendChild(avatarButtons);
+
+    const shortcutsSection = document.createElement("div");
+    shortcutsSection.className = "settings-section";
+
+    const shortcutTitle = document.createElement("div");
+    shortcutTitle.className = "settings-section-title";
+    shortcutTitle.innerText = "Shortcut Keys";
+
+    shortcutsSection.appendChild(shortcutTitle);
+
+    const shortcutFields = [
+        {
+            key: "muteAll",
+            label: "Mute / Unmute All Players"
+        },
+        {
+            key: "startStream",
+            label: "Start Stream"
+        },
+        {
+            key: "endStream",
+            label: "End Stream"
+        },
+        {
+            key: "muteMic",
+            label: "Mute / Unmute Mic"
+        },
+        {
+            key: "avatarSettings",
+            label: "Open Settings"
+        }
+    ];
+
+    shortcutFields.forEach((field) => {
+        const row = document.createElement("div");
+        row.className = "shortcut-row";
+
+        const label = document.createElement("label");
+        label.innerText = field.label;
+
+        const input = document.createElement("input");
+        input.className = "shortcut-input";
+        input.value = userShortcuts[field.key] || "";
+        input.readOnly = true;
+        input.placeholder = "Click and press key";
+
+        input.onkeydown = (event) => {
+            event.preventDefault();
+
+            const combo = formatShortcutFromEvent(event);
+
+            if (!combo) {
+                return;
+            }
+
+            userShortcuts[field.key] = combo;
+            input.value = combo;
+            saveShortcutSettings();
+        };
+
+        const clearBtn = document.createElement("button");
+        clearBtn.className = "shortcut-clear-btn";
+        clearBtn.innerText = "Clear";
+        clearBtn.onclick = () => {
+            userShortcuts[field.key] = "";
+            input.value = "";
+            saveShortcutSettings();
+        };
+
+        row.appendChild(label);
+        row.appendChild(input);
+        row.appendChild(clearBtn);
+
+        shortcutsSection.appendChild(row);
+    });
+
+    const resetBtn = document.createElement("button");
+    resetBtn.className = "settings-secondary-btn full-width";
+    resetBtn.innerText = "Reset Default Shortcuts";
+    resetBtn.onclick = () => {
+        userShortcuts = {
+            ...defaultShortcuts
+        };
+
+        saveShortcutSettings();
+        closeSettingsModal();
+        openSettingsModal();
+    };
+
+    shortcutsSection.appendChild(resetBtn);
+
+    box.appendChild(titleRow);
+    box.appendChild(avatarSection);
+    box.appendChild(shortcutsSection);
+
+    settingsModal.appendChild(box);
+    document.body.appendChild(settingsModal);
+}
+
+function getInitials(name) {
+    const clean = String(name || "U").trim();
+
+    if (!clean) {
+        return "U";
+    }
+
+    return clean.charAt(0).toUpperCase();
+}
+
+function processAvatarFile(file) {
+    return new Promise((resolve, reject) => {
+        if (!file.type.startsWith("image/")) {
+            reject(new Error("Invalid image"));
+            return;
+        }
+
+        const reader = new FileReader();
+
+        reader.onload = () => {
+            const img = new Image();
+
+            img.onload = () => {
+                const canvas = document.createElement("canvas");
+                const size = 128;
+
+                canvas.width = size;
+                canvas.height = size;
+
+                const ctx = canvas.getContext("2d");
+
+                const minSide = Math.min(img.width, img.height);
+                const sx = (img.width - minSide) / 2;
+                const sy = (img.height - minSide) / 2;
+
+                ctx.drawImage(
+                    img,
+                    sx,
+                    sy,
+                    minSide,
+                    minSide,
+                    0,
+                    0,
+                    size,
+                    size
+                );
+
+                const dataUrl = canvas.toDataURL("image/jpeg", 0.82);
+
+                resolve(dataUrl);
+            };
+
+            img.onerror = reject;
+            img.src = reader.result;
+        };
+
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+    });
+}
+
+async function saveAvatar(avatarData) {
+    const res = await fetch("/api/profile/avatar", {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+            avatarData: avatarData
+        })
+    });
+
+    const data = await res.json();
+
+    if (!data.success) {
+        alert(data.message || "Could not save avatar");
+        return;
+    }
+
+    myAvatarData = data.avatarData || "";
+
+    if (socket.id) {
+        userAvatars[socket.id] = myAvatarData;
+    }
+
+    socket.emit("avatar-updated", {
+        avatarData: myAvatarData
+    });
+
+    updateSettingsButtonAvatar();
+    renderChannels();
+    renderCurrentUsers();
+}
+
+function formatShortcutFromEvent(event) {
+    const parts = [];
+
+    if (event.ctrlKey) {
+        parts.push("Ctrl");
+    }
+
+    if (event.shiftKey) {
+        parts.push("Shift");
+    }
+
+    if (event.altKey) {
+        parts.push("Alt");
+    }
+
+    const key = event.key;
+
+    if (
+        key === "Control" ||
+        key === "Shift" ||
+        key === "Alt" ||
+        key === "Meta"
+    ) {
+        return "";
+    }
+
+    if (key.length === 1) {
+        parts.push(key.toUpperCase());
+    } else {
+        parts.push(key);
+    }
+
+    return parts.join("+");
+}
+
+function normalizeShortcutText(text) {
+    return String(text || "")
+        .trim()
+        .toLowerCase()
+        .replace(/\s+/g, "");
+}
+
+function shortcutMatches(event, shortcutText) {
+    if (!shortcutText) {
+        return false;
+    }
+
+    return normalizeShortcutText(formatShortcutFromEvent(event)) ===
+        normalizeShortcutText(shortcutText);
+}
+
+function isTypingInInput(event) {
+    const target = event.target;
+    const tag = target.tagName.toLowerCase();
+
+    return (
+        tag === "input" ||
+        tag === "textarea" ||
+        target.isContentEditable
+    );
+}
+
+function setupShortcutListener() {
+    if (shortcutListenerReady) {
+        return;
+    }
+
+    shortcutListenerReady = true;
+
+    document.addEventListener("keydown", async (event) => {
+        if (isTypingInInput(event)) {
+            return;
+        }
+
+        if (shortcutMatches(event, userShortcuts.muteAll)) {
+            event.preventDefault();
+            toggleMuteAllUsers();
+            return;
+        }
+
+        if (shortcutMatches(event, userShortcuts.startStream)) {
+            event.preventDefault();
+
+            if (!isStreaming) {
+                await startScreenStream();
+            }
+
+            return;
+        }
+
+        if (shortcutMatches(event, userShortcuts.endStream)) {
+            event.preventDefault();
+
+            if (isStreaming) {
+                await stopScreenStream();
+            }
+
+            return;
+        }
+
+        if (shortcutMatches(event, userShortcuts.muteMic)) {
+            event.preventDefault();
+            toggleSelfMute();
+            return;
+        }
+
+        if (shortcutMatches(event, userShortcuts.avatarSettings)) {
+            event.preventDefault();
+            openSettingsModal();
+            return;
+        }
+    });
+}
+
+function createAvatarElement(user) {
+    const avatar = document.createElement("span");
+    avatar.className = "user-avatar";
+
+    const avatarData = user.avatarData || userAvatars[user.id] || "";
+
+    if (avatarData) {
+        const img = document.createElement("img");
+        img.src = avatarData;
+        img.alt = user.username || "User";
+
+        avatar.appendChild(img);
+    } else {
+        avatar.innerText = getInitials(user.username);
+    }
+
+    return avatar;
+}
+
+/* ================= MUTE ALL PLAYERS ================= */
+
+function applyMuteAllStateToKnownUsers() {
+    currentVoiceUsers.forEach((user) => {
+        if (user.id !== socket.id) {
+            userMuted[user.id] = allUsersMuted;
+            applyUserAudioSettings(user.id);
+        }
+    });
+
+    Object.values(serverChannelUsers).forEach((users) => {
+        users.forEach((user) => {
+            if (user.id !== socket.id) {
+                userMuted[user.id] = allUsersMuted;
+                applyUserAudioSettings(user.id);
+            }
+        });
+    });
+
+    renderChannels();
+    renderCurrentUsers();
+}
+
+function toggleMuteAllUsers() {
+    allUsersMuted = !allUsersMuted;
+
+    applyMuteAllStateToKnownUsers();
+
+    if (allUsersMuted) {
+        status.innerText = "All other players muted 🔇";
+    } else {
+        status.innerText = "All other players unmuted 🔊";
+    }
+}
+
 /* ================= CHANNEL USER REFRESH ================= */
 
 function stopChannelUserRefresh() {
@@ -197,6 +752,12 @@ async function refreshServerChannelUsers() {
                 streamingUsers[user.id] = !!user.isStreaming;
                 mutedUsers[user.id] = !!user.isMuted;
                 speakingUsers[user.id] = !!user.isSpeaking;
+                userAvatars[user.id] = user.avatarData || "";
+
+                if (allUsersMuted && user.id !== socket.id) {
+                    userMuted[user.id] = true;
+                    applyUserAudioSettings(user.id);
+                }
             });
         });
 
@@ -671,6 +1232,11 @@ async function checkLogin() {
         username.value = data.username;
         accountName.innerText = "Signed in as: " + data.username;
 
+        loadShortcutSettings();
+        createSettingsButton();
+        setupShortcutListener();
+
+        await loadUserProfile();
         await loadServers();
 
     } catch (err) {
@@ -684,6 +1250,14 @@ checkLogin();
 /* ================= SOCKET CONNECT ================= */
 socket.on("connect", () => {
     console.log("CONNECTED:", socket.id);
+
+    if (myAvatarData) {
+        userAvatars[socket.id] = myAvatarData;
+
+        socket.emit("avatar-updated", {
+            avatarData: myAvatarData
+        });
+    }
 
     if (activeServer) {
         socket.emit("watch-server", {
@@ -960,6 +1534,9 @@ function renderUserRowForChannel(user, channelId) {
         userDiv.classList.add("speaking-user");
     }
 
+    const avatar = createAvatarElement(user);
+    userDiv.appendChild(avatar);
+
     const nameSpan = document.createElement("span");
     nameSpan.textContent =
         user.username + (user.id === socket.id ? " (You)" : "");
@@ -1216,7 +1793,7 @@ function leaveCurrentVoice(updateUi) {
 }
 
 /* ================= SELF MUTE ================= */
-muteBtn.onclick = () => {
+function toggleSelfMute() {
     if (!localStream) {
         alert("Enable mic first");
         return;
@@ -1260,6 +1837,10 @@ muteBtn.onclick = () => {
         status.innerText = "Mic ON 🎤";
         muteBtn.innerText = "🔇 Mute";
     }
+}
+
+muteBtn.onclick = () => {
+    toggleSelfMute();
 };
 
 /* ================= LOGOUT ================= */
@@ -1683,6 +2264,7 @@ socket.on("user-left", ({ id }) => {
     delete streamingUsers[id];
     delete mutedUsers[id];
     delete speakingUsers[id];
+    delete userAvatars[id];
 
     removePeerAndMedia(id);
 
@@ -1702,6 +2284,12 @@ socket.on("voice-joined-confirmed", ({ serverId, channelId, users }) => {
         streamingUsers[user.id] = !!user.isStreaming;
         mutedUsers[user.id] = !!user.isMuted;
         speakingUsers[user.id] = !!user.isSpeaking;
+        userAvatars[user.id] = user.avatarData || "";
+
+        if (allUsersMuted && user.id !== socket.id) {
+            userMuted[user.id] = true;
+            applyUserAudioSettings(user.id);
+        }
     });
 
     renderChannels();
@@ -1729,12 +2317,49 @@ socket.on("server-channel-users", ({ serverId, channels }) => {
             streamingUsers[user.id] = !!user.isStreaming;
             mutedUsers[user.id] = !!user.isMuted;
             speakingUsers[user.id] = !!user.isSpeaking;
+            userAvatars[user.id] = user.avatarData || "";
+
+            if (allUsersMuted && user.id !== socket.id) {
+                userMuted[user.id] = true;
+                applyUserAudioSettings(user.id);
+            }
         });
     });
 
     if (activeVoiceChannel) {
         currentVoiceUsers = serverChannelUsers[activeVoiceChannel.id] || [];
     }
+
+    renderChannels();
+    renderCurrentUsers();
+});
+
+socket.on("user-profile-updated", ({ id, avatarData }) => {
+    userAvatars[id] = avatarData || "";
+
+    currentVoiceUsers = currentVoiceUsers.map(user => {
+        if (user.id === id) {
+            return {
+                ...user,
+                avatarData: avatarData || ""
+            };
+        }
+
+        return user;
+    });
+
+    Object.keys(serverChannelUsers).forEach((channelId) => {
+        serverChannelUsers[channelId] = serverChannelUsers[channelId].map(user => {
+            if (user.id === id) {
+                return {
+                    ...user,
+                    avatarData: avatarData || ""
+                };
+            }
+
+            return user;
+        });
+    });
 
     renderChannels();
     renderCurrentUsers();
@@ -1906,6 +2531,12 @@ socket.on("voice-user-list", (users) => {
         streamingUsers[user.id] = !!user.isStreaming;
         mutedUsers[user.id] = !!user.isMuted;
         speakingUsers[user.id] = !!user.isSpeaking;
+        userAvatars[user.id] = user.avatarData || "";
+
+        if (allUsersMuted && user.id !== socket.id) {
+            userMuted[user.id] = true;
+            applyUserAudioSettings(user.id);
+        }
     });
 
     if (activeVoiceChannel) {
@@ -1923,6 +2554,12 @@ socket.on("user-list", (users) => {
         streamingUsers[user.id] = !!user.isStreaming;
         mutedUsers[user.id] = !!user.isMuted;
         speakingUsers[user.id] = !!user.isSpeaking;
+        userAvatars[user.id] = user.avatarData || "";
+
+        if (allUsersMuted && user.id !== socket.id) {
+            userMuted[user.id] = true;
+            applyUserAudioSettings(user.id);
+        }
     });
 
     if (activeVoiceChannel) {
@@ -1965,6 +2602,9 @@ function renderCurrentUsers() {
 
         const name = document.createElement("span");
         name.className = "user-name";
+
+        const avatar = createAvatarElement(u);
+        name.appendChild(avatar);
 
         const nameText = document.createElement("span");
         nameText.textContent = u.username + (u.id === socket.id ? " (You)" : "");
@@ -2009,6 +2649,7 @@ function removePeerAndMedia(id) {
     delete streamingUsers[id];
     delete mutedUsers[id];
     delete speakingUsers[id];
+    delete userAvatars[id];
 }
 
 function resetRemoteMediaAndPeers() {
