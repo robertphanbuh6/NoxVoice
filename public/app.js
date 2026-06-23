@@ -1,4 +1,4 @@
-console.log("NOXVOICE APP LOADED - SETTINGS AVATAR SHORTCUTS SPEAKING GLOW");
+console.log("NOXVOICE APP LOADED - SETTINGS AVATAR SHORTCUTS SPEAKING GLOW SELF FIX");
 
 const socket = io();
 
@@ -169,7 +169,6 @@ function askInput(titleText, placeholderText) {
 }
 
 /* ================= SETTINGS / AVATAR / SHORTCUTS ================= */
-
 function loadShortcutSettings() {
     try {
         const saved = localStorage.getItem("noxvoice_shortcuts");
@@ -763,6 +762,17 @@ async function refreshServerChannelUsers() {
 
         if (activeVoiceChannel) {
             currentVoiceUsers = serverChannelUsers[activeVoiceChannel.id] || [];
+
+            if (hasJoinedVoice && socket.id) {
+                const selfExists = currentVoiceUsers.some((user) => {
+                    return user.id === socket.id;
+                });
+
+                if (!selfExists) {
+                    showSelfInActiveChannel();
+                    return;
+                }
+            }
         }
 
         renderChannels();
@@ -1265,6 +1275,10 @@ socket.on("connect", () => {
         });
 
         startChannelUserRefresh();
+
+        if (hasJoinedVoice) {
+            showSelfInActiveChannel();
+        }
     }
 });
 
@@ -1526,6 +1540,48 @@ function getUsersForChannel(channelId) {
     return [];
 }
 
+function makeSelfVoiceUser() {
+    return {
+        id: socket.id,
+        username: loggedInUsername || username.value || "You",
+        serverId: activeServer ? activeServer._id : "",
+        channelId: activeVoiceChannel ? activeVoiceChannel.id : "",
+        avatarData: myAvatarData || "",
+        isStreaming: isStreaming,
+        isMuted: muted,
+        isSpeaking: speakingUsers[socket.id] || false
+    };
+}
+
+function showSelfInActiveChannel() {
+    if (!activeServer || !activeVoiceChannel || !socket.id) {
+        return;
+    }
+
+    const selfUser = makeSelfVoiceUser();
+
+    if (!serverChannelUsers[activeVoiceChannel.id]) {
+        serverChannelUsers[activeVoiceChannel.id] = [];
+    }
+
+    serverChannelUsers[activeVoiceChannel.id] =
+        serverChannelUsers[activeVoiceChannel.id].filter((user) => {
+            return user.id !== socket.id && user.username !== selfUser.username;
+        });
+
+    serverChannelUsers[activeVoiceChannel.id].unshift(selfUser);
+
+    currentVoiceUsers = serverChannelUsers[activeVoiceChannel.id];
+
+    streamingUsers[socket.id] = isStreaming;
+    mutedUsers[socket.id] = muted;
+    speakingUsers[socket.id] = speakingUsers[socket.id] || false;
+    userAvatars[socket.id] = myAvatarData || "";
+
+    renderChannels();
+    renderCurrentUsers();
+}
+
 function renderUserRowForChannel(user, channelId) {
     const userDiv = document.createElement("div");
     userDiv.className = "voice-user-row";
@@ -1719,8 +1775,9 @@ function joinSelectedVoiceChannel() {
 
     resetRemoteMediaAndPeers();
 
-    currentVoiceUsers = [];
-    renderCurrentUsers();
+    hasJoinedVoice = true;
+
+    showSelfInActiveChannel();
 
     socket.emit("join-voice-channel", {
         serverId: activeServer._id,
@@ -1748,8 +1805,6 @@ function joinSelectedVoiceChannel() {
     startSpeakingDetection();
 
     playUserJoinSound();
-
-    hasJoinedVoice = true;
 
     status.innerText = "Joined voice: " + activeVoiceChannel.name;
 
@@ -1827,8 +1882,7 @@ function toggleSelfMute() {
         return user;
     });
 
-    renderChannels();
-    renderCurrentUsers();
+    showSelfInActiveChannel();
 
     if (muted) {
         status.innerText = "You are muted 🔇";
@@ -2023,8 +2077,7 @@ async function startScreenStream() {
 
         showLocalScreenPreview(screenStream);
 
-        renderChannels();
-        renderCurrentUsers();
+        showSelfInActiveChannel();
 
         Object.keys(peers).forEach(async (id) => {
             const peer = peers[id];
@@ -2057,8 +2110,7 @@ async function stopScreenStream() {
         isStreaming: false
     });
 
-    renderChannels();
-    renderCurrentUsers();
+    showSelfInActiveChannel();
 
     Object.keys(peers).forEach(async (id) => {
         const peer = peers[id];
@@ -2292,6 +2344,17 @@ socket.on("voice-joined-confirmed", ({ serverId, channelId, users }) => {
         }
     });
 
+    if (hasJoinedVoice && activeVoiceChannel && activeVoiceChannel.id === channelId) {
+        const selfExists = currentVoiceUsers.some((user) => {
+            return user.id === socket.id;
+        });
+
+        if (!selfExists) {
+            showSelfInActiveChannel();
+            return;
+        }
+    }
+
     renderChannels();
     renderCurrentUsers();
 
@@ -2328,6 +2391,17 @@ socket.on("server-channel-users", ({ serverId, channels }) => {
 
     if (activeVoiceChannel) {
         currentVoiceUsers = serverChannelUsers[activeVoiceChannel.id] || [];
+
+        if (hasJoinedVoice && socket.id) {
+            const selfExists = currentVoiceUsers.some((user) => {
+                return user.id === socket.id;
+            });
+
+            if (!selfExists) {
+                showSelfInActiveChannel();
+                return;
+            }
+        }
     }
 
     renderChannels();
@@ -2360,6 +2434,11 @@ socket.on("user-profile-updated", ({ id, avatarData }) => {
             return user;
         });
     });
+
+    if (id === socket.id) {
+        showSelfInActiveChannel();
+        return;
+    }
 
     renderChannels();
     renderCurrentUsers();
@@ -2541,6 +2620,17 @@ socket.on("voice-user-list", (users) => {
 
     if (activeVoiceChannel) {
         serverChannelUsers[activeVoiceChannel.id] = currentVoiceUsers;
+
+        if (hasJoinedVoice && socket.id) {
+            const selfExists = currentVoiceUsers.some((user) => {
+                return user.id === socket.id;
+            });
+
+            if (!selfExists) {
+                showSelfInActiveChannel();
+                return;
+            }
+        }
     }
 
     renderChannels();
@@ -2564,6 +2654,17 @@ socket.on("user-list", (users) => {
 
     if (activeVoiceChannel) {
         serverChannelUsers[activeVoiceChannel.id] = currentVoiceUsers;
+
+        if (hasJoinedVoice && socket.id) {
+            const selfExists = currentVoiceUsers.some((user) => {
+                return user.id === socket.id;
+            });
+
+            if (!selfExists) {
+                showSelfInActiveChannel();
+                return;
+            }
+        }
     }
 
     renderChannels();
