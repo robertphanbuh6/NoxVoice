@@ -124,6 +124,10 @@ const sessionMiddleware = session({
 app.use(sessionMiddleware);
 io.engine.use(sessionMiddleware);
 
+/* ================= LIVE VOICE MEMORY ================= */
+
+const voiceRooms = {};
+
 /* ================= HELPERS ================= */
 
 function requireLogin(req, res, next) {
@@ -158,6 +162,14 @@ function makeChannelId(name) {
     return clean + "-" + crypto.randomBytes(3).toString("hex");
 }
 
+function makeServerWatchRoom(serverId) {
+    return "server-watch:" + serverId;
+}
+
+function makeVoiceRoomName(serverId, channelId) {
+    return "server:" + serverId + ":voice:" + channelId;
+}
+
 async function getUserServer(serverId, username) {
     const foundServer = await VoiceServer.findById(serverId);
 
@@ -170,6 +182,34 @@ async function getUserServer(serverId, username) {
     }
 
     return foundServer;
+}
+
+function getServerChannelUsers(serverId) {
+    const result = {};
+
+    Object.keys(voiceRooms).forEach((roomName) => {
+        const prefix = "server:" + serverId + ":voice:";
+
+        if (!roomName.startsWith(prefix)) {
+            return;
+        }
+
+        const channelId = roomName.replace(prefix, "");
+        result[channelId] = voiceRooms[roomName] || [];
+    });
+
+    return result;
+}
+
+function emitServerChannelUsers(serverId) {
+    if (!serverId || serverId === "legacy") {
+        return;
+    }
+
+    io.to(makeServerWatchRoom(serverId)).emit("server-channel-users", {
+        serverId: serverId,
+        channels: getServerChannelUsers(serverId)
+    });
 }
 
 /* ================= AUTH ROUTES ================= */
@@ -468,6 +508,35 @@ app.get("/api/servers/:serverId", requireApiLogin, async (req, res) => {
     }
 });
 
+app.get("/api/servers/:serverId/channel-users", requireApiLogin, async (req, res) => {
+    try {
+        const username = req.session.user.username;
+        const serverId = String(req.params.serverId);
+
+        const foundServer = await getUserServer(serverId, username);
+
+        if (!foundServer) {
+            return res.json({
+                success: false,
+                message: "Server not found"
+            });
+        }
+
+        res.json({
+            success: true,
+            channels: getServerChannelUsers(serverId)
+        });
+
+    } catch (err) {
+        console.error("CHANNEL USERS API ERROR:", err);
+
+        res.json({
+            success: false,
+            message: "Could not load channel users"
+        });
+    }
+});
+
 app.post("/api/servers/:serverId/channels", requireApiLogin, async (req, res) => {
     try {
         const username = req.session.user.username;
@@ -542,13 +611,18 @@ app.use(express.static(publicPath));
 
 /* ================= SOCKET / VOICE ================= */
 
-const voiceRooms = {};
-
 function updateVoiceRoomList(roomName) {
     const users = voiceRooms[roomName] || [];
 
     io.to(roomName).emit("voice-user-list", users);
     io.to(roomName).emit("user-list", users);
+
+    if (roomName.startsWith("server:")) {
+        const parts = roomName.split(":");
+        const serverId = parts[1];
+
+        emitServerChannelUsers(serverId);
+    }
 }
 
 function removeSocketFromVoiceRoom(socket) {
@@ -557,6 +631,8 @@ function removeSocketFromVoiceRoom(socket) {
     if (!oldRoom || !voiceRooms[oldRoom]) {
         return;
     }
+
+    const oldServerId = socket.currentServerId;
 
     voiceRooms[oldRoom] = voiceRooms[oldRoom].filter(
         user => user.id !== socket.id
@@ -571,6 +647,10 @@ function removeSocketFromVoiceRoom(socket) {
 
     if (voiceRooms[oldRoom].length === 0) {
         delete voiceRooms[oldRoom];
+    }
+
+    if (oldServerId && oldServerId !== "legacy") {
+        emitServerChannelUsers(oldServerId);
     }
 
     socket.leave(oldRoom);
@@ -611,10 +691,22 @@ function joinSocketToVoiceRoom(socket, roomName, serverId, channelId) {
 
     updateVoiceRoomList(roomName);
 
+    socket.emit("voice-joined-confirmed", {
+        serverId: serverId,
+        channelId: channelId,
+        users: voiceRooms[roomName] || []
+    });
+
     socket.to(roomName).emit("user-joined", {
         id: socket.id,
         username: username
     });
+
+    if (serverId && serverId !== "legacy") {
+        socket.join(makeServerWatchRoom(serverId));
+        socket.watchingServerId = serverId;
+        emitServerChannelUsers(serverId);
+    }
 
     console.log(username + " joined voice room " + roomName);
 }
@@ -628,6 +720,47 @@ io.on("connection", (socket) => {
     }
 
     console.log("CONNECTED:", socket.id, sessionUser.username);
+
+    socket.on("watch-server", async ({ serverId }) => {
+        try {
+            const username = sessionUser.username;
+
+            const foundServer = await getUserServer(serverId, username);
+
+            if (!foundServer) {
+                socket.emit("watch-server-error", {
+                    message: "Server not found"
+                });
+                return;
+            }
+
+            if (socket.watchingServerId) {
+                socket.leave(makeServerWatchRoom(socket.watchingServerId));
+            }
+
+            socket.join(makeServerWatchRoom(serverId));
+            socket.watchingServerId = serverId;
+
+            socket.emit("server-channel-users", {
+                serverId: serverId,
+                channels: getServerChannelUsers(serverId)
+            });
+
+        } catch (err) {
+            console.error("WATCH SERVER ERROR:", err);
+
+            socket.emit("watch-server-error", {
+                message: "Could not watch server"
+            });
+        }
+    });
+
+    socket.on("unwatch-server", () => {
+        if (socket.watchingServerId) {
+            socket.leave(makeServerWatchRoom(socket.watchingServerId));
+            socket.watchingServerId = null;
+        }
+    });
 
     socket.on("join-voice-channel", async ({ serverId, channelId }) => {
         try {
@@ -653,7 +786,7 @@ io.on("connection", (socket) => {
                 return;
             }
 
-            const roomName = "server:" + serverId + ":voice:" + channelId;
+            const roomName = makeVoiceRoomName(serverId, channelId);
 
             joinSocketToVoiceRoom(socket, roomName, serverId, channelId);
 
@@ -677,7 +810,13 @@ io.on("connection", (socket) => {
     });
 
     socket.on("leave-voice-channel", () => {
+        const oldServerId = socket.currentServerId;
+
         removeSocketFromVoiceRoom(socket);
+
+        if (oldServerId && oldServerId !== "legacy") {
+            emitServerChannelUsers(oldServerId);
+        }
     });
 
     socket.on("stream-status", ({ isStreaming }) => {
@@ -750,7 +889,13 @@ io.on("connection", (socket) => {
     });
 
     socket.on("disconnect", () => {
+        const oldServerId = socket.currentServerId || socket.watchingServerId;
+
         removeSocketFromVoiceRoom(socket);
+
+        if (oldServerId && oldServerId !== "legacy") {
+            emitServerChannelUsers(oldServerId);
+        }
 
         console.log("DISCONNECTED:", socket.id);
     });

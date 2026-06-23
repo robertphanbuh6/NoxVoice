@@ -1,4 +1,4 @@
-console.log("NOXVOICE APP LOADED - CUSTOM MODAL + SHOW USERS IN ALL CHANNELS");
+console.log("NOXVOICE APP LOADED - FIX STALE CHANNEL USERS");
 
 const socket = io();
 
@@ -65,6 +65,7 @@ const remoteStreamAudioTracks = {};
 const watchingStreams = {};
 
 let serverChannelUsers = {};
+let channelUserRefreshTimer = null;
 
 /* ================= CUSTOM INPUT MODAL ================= */
 function askInput(titleText, placeholderText) {
@@ -145,6 +146,68 @@ function askInput(titleText, placeholderText) {
             input.focus();
         }, 50);
     });
+}
+
+/* ================= CHANNEL USER REFRESH ================= */
+
+function stopChannelUserRefresh() {
+    if (channelUserRefreshTimer) {
+        clearInterval(channelUserRefreshTimer);
+        channelUserRefreshTimer = null;
+    }
+}
+
+function startChannelUserRefresh() {
+    stopChannelUserRefresh();
+
+    refreshServerChannelUsers();
+
+    channelUserRefreshTimer = setInterval(() => {
+        refreshServerChannelUsers();
+    }, 2000);
+}
+
+async function refreshServerChannelUsers() {
+    if (!activeServer) {
+        return;
+    }
+
+    try {
+        const serverId = activeServer._id;
+
+        const res = await fetch(`/api/servers/${serverId}/channel-users?time=${Date.now()}`, {
+            cache: "no-store"
+        });
+
+        const data = await res.json();
+
+        if (!data.success) {
+            return;
+        }
+
+        if (!activeServer || activeServer._id !== serverId) {
+            return;
+        }
+
+        serverChannelUsers = data.channels || {};
+
+        Object.values(serverChannelUsers).forEach((users) => {
+            users.forEach((user) => {
+                streamingUsers[user.id] = !!user.isStreaming;
+                mutedUsers[user.id] = !!user.isMuted;
+            });
+        });
+
+        if (activeVoiceChannel) {
+            currentVoiceUsers = serverChannelUsers[activeVoiceChannel.id] || [];
+        }
+
+        renderChannels();
+        renderCurrentUsers();
+
+    } catch (err) {
+        console.log("Channel users refresh error:", err);
+    }
 }
 
 /* ================= JOIN / LEAVE SOUND EFFECTS ================= */
@@ -499,6 +562,8 @@ socket.on("connect", () => {
         socket.emit("watch-server", {
             serverId: activeServer._id
         });
+
+        startChannelUserRefresh();
     }
 });
 
@@ -622,6 +687,8 @@ async function createVoiceChannel() {
     socket.emit("watch-server", {
         serverId: activeServer._id
     });
+
+    refreshServerChannelUsers();
 }
 
 /* ================= HOME VIEW / SERVER UI ================= */
@@ -631,6 +698,8 @@ function showHomeView(leaveVoice) {
     }
 
     socket.emit("unwatch-server");
+
+    stopChannelUserRefresh();
 
     activeServer = null;
     activeVoiceChannel = null;
@@ -720,6 +789,8 @@ function selectServer(serverId) {
     socket.emit("watch-server", {
         serverId: activeServer._id
     });
+
+    startChannelUserRefresh();
 }
 
 function renderLiveBadge(user) {
@@ -960,6 +1031,10 @@ function joinSelectedVoiceChannel() {
         });
     }, 300);
 
+    setTimeout(() => {
+        refreshServerChannelUsers();
+    }, 500);
+
     playUserJoinSound();
 
     hasJoinedVoice = true;
@@ -978,6 +1053,10 @@ leaveVoiceBtn.onclick = () => {
 
 function leaveCurrentVoice(updateUi) {
     socket.emit("leave-voice-channel");
+
+    setTimeout(() => {
+        refreshServerChannelUsers();
+    }, 500);
 
     resetRemoteMediaAndPeers();
 
@@ -1039,6 +1118,8 @@ muteBtn.onclick = () => {
 
 /* ================= LOGOUT ================= */
 logoutBtn.onclick = async () => {
+    stopChannelUserRefresh();
+
     await fetch("/api/logout", {
         method: "POST"
     });
@@ -1456,6 +1537,35 @@ socket.on("user-left", ({ id }) => {
     delete mutedUsers[id];
 
     removePeerAndMedia(id);
+
+    refreshServerChannelUsers();
+});
+
+socket.on("voice-joined-confirmed", ({ serverId, channelId, users }) => {
+    if (!activeServer || activeServer._id !== serverId) {
+        return;
+    }
+
+    currentVoiceUsers = users || [];
+
+    serverChannelUsers[channelId] = currentVoiceUsers;
+
+    currentVoiceUsers.forEach(user => {
+        streamingUsers[user.id] = !!user.isStreaming;
+        mutedUsers[user.id] = !!user.isMuted;
+    });
+
+    renderChannels();
+    renderCurrentUsers();
+
+    if (activeVoiceChannel) {
+        status.innerText = "Joined voice: " + activeVoiceChannel.name;
+
+        voiceStatusTitle.innerText = "Voice Connected";
+        voiceStatusText.innerText = activeVoiceChannel.name + " / " + activeServer.name;
+    }
+
+    refreshServerChannelUsers();
 });
 
 socket.on("server-channel-users", ({ serverId, channels }) => {
