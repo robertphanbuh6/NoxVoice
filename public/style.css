@@ -715,3 +715,75 @@ body {
     top: 8px;
     left: -1px;
 }
+.nox-modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.65);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 999999;
+}
+
+.nox-modal-box {
+    width: 360px;
+    background: #181a21;
+    border: 1px solid #343846;
+    border-radius: 14px;
+    padding: 20px;
+    box-shadow: 0 18px 45px rgba(0, 0, 0, 0.55);
+}
+
+.nox-modal-box h3 {
+    color: #ffffff;
+    margin: 0 0 14px;
+    font-size: 20px;
+}
+
+.nox-modal-input {
+    width: 100%;
+    height: 42px;
+    background: #0f1117;
+    border: 1px solid #343846;
+    border-radius: 10px;
+    color: white;
+    padding: 0 12px;
+    font-size: 15px;
+    outline: none;
+}
+
+.nox-modal-input:focus {
+    border-color: #5865f2;
+}
+
+.nox-modal-buttons {
+    display: flex;
+    gap: 10px;
+    margin-top: 16px;
+}
+
+.nox-modal-buttons button {
+    flex: 1;
+    height: 38px;
+    border: none;
+    border-radius: 9px;
+    color: white;
+    font-weight: bold;
+    cursor: pointer;
+}
+
+.nox-modal-cancel {
+    background: #4b5565;
+}
+
+.nox-modal-ok {
+    background: #5865f2;
+}
+
+.nox-modal-cancel:hover {
+    background: #5b6678;
+}
+
+.nox-modal-ok:hover {
+    background: #4752c4;
+}

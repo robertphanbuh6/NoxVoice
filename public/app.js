@@ -1,4 +1,4 @@
-console.log("NOXVOICE APP LOADED - MANUAL SERVER SELECT + LIVE WATCH + MUTED ICON");
+console.log("NOXVOICE APP LOADED - CUSTOM MODAL + SHOW USERS IN ALL CHANNELS");
 
 const socket = io();
 
@@ -63,6 +63,89 @@ const mutedUsers = {};
 const remoteVideoTracks = {};
 const remoteStreamAudioTracks = {};
 const watchingStreams = {};
+
+let serverChannelUsers = {};
+
+/* ================= CUSTOM INPUT MODAL ================= */
+function askInput(titleText, placeholderText) {
+    return new Promise((resolve) => {
+        const oldModal = document.getElementById("nox-input-modal");
+
+        if (oldModal) {
+            oldModal.remove();
+        }
+
+        const overlay = document.createElement("div");
+        overlay.id = "nox-input-modal";
+        overlay.className = "nox-modal-overlay";
+
+        const box = document.createElement("div");
+        box.className = "nox-modal-box";
+
+        const title = document.createElement("h3");
+        title.innerText = titleText;
+
+        const input = document.createElement("input");
+        input.className = "nox-modal-input";
+        input.placeholder = placeholderText;
+        input.autocomplete = "off";
+
+        const buttons = document.createElement("div");
+        buttons.className = "nox-modal-buttons";
+
+        const cancelBtn = document.createElement("button");
+        cancelBtn.className = "nox-modal-cancel";
+        cancelBtn.innerText = "Cancel";
+
+        const okBtn = document.createElement("button");
+        okBtn.className = "nox-modal-ok";
+        okBtn.innerText = "OK";
+
+        function close(value) {
+            overlay.remove();
+            resolve(value);
+        }
+
+        cancelBtn.onclick = () => {
+            close(null);
+        };
+
+        okBtn.onclick = () => {
+            const value = input.value.trim();
+
+            if (!value) {
+                input.focus();
+                return;
+            }
+
+            close(value);
+        };
+
+        input.addEventListener("keydown", (event) => {
+            if (event.key === "Enter") {
+                okBtn.click();
+            }
+
+            if (event.key === "Escape") {
+                cancelBtn.click();
+            }
+        });
+
+        buttons.appendChild(cancelBtn);
+        buttons.appendChild(okBtn);
+
+        box.appendChild(title);
+        box.appendChild(input);
+        box.appendChild(buttons);
+
+        overlay.appendChild(box);
+        document.body.appendChild(overlay);
+
+        setTimeout(() => {
+            input.focus();
+        }, 50);
+    });
+}
 
 /* ================= JOIN / LEAVE SOUND EFFECTS ================= */
 let audioContext = null;
@@ -171,7 +254,11 @@ function showUserVolumeMenu(event, user) {
 
     userVolumeMenu.appendChild(title);
 
-    if (streamingUsers[user.id] || user.isStreaming) {
+    const sameActiveChannel =
+        activeVoiceChannel &&
+        user.channelId === activeVoiceChannel.id;
+
+    if ((streamingUsers[user.id] || user.isStreaming) && sameActiveChannel) {
         const watchBtn = document.createElement("button");
         watchBtn.className = "right-click-watch-btn";
 
@@ -192,6 +279,13 @@ function showUserVolumeMenu(event, user) {
         };
 
         userVolumeMenu.appendChild(watchBtn);
+    }
+
+    if ((streamingUsers[user.id] || user.isStreaming) && !sameActiveChannel) {
+        const note = document.createElement("div");
+        note.className = "user-volume-menu-label";
+        note.innerText = "Join this voice channel to watch stream.";
+        userVolumeMenu.appendChild(note);
     }
 
     const label = document.createElement("div");
@@ -248,7 +342,7 @@ function showUserVolumeMenu(event, user) {
     document.body.appendChild(userVolumeMenu);
 
     const menuWidth = 230;
-    const menuHeight = 230;
+    const menuHeight = 250;
 
     let x = event.clientX;
     let y = event.clientY;
@@ -400,6 +494,12 @@ checkLogin();
 /* ================= SOCKET CONNECT ================= */
 socket.on("connect", () => {
     console.log("CONNECTED:", socket.id);
+
+    if (activeServer) {
+        socket.emit("watch-server", {
+            serverId: activeServer._id
+        });
+    }
 });
 
 /* ================= SERVER API ================= */
@@ -416,14 +516,11 @@ async function loadServers() {
 
     renderServerList();
 
-    // IMPORTANT:
-    // No automatic server selection after login.
-    // User must click the server manually.
     showHomeView(false);
 }
 
 async function createServer() {
-    const name = prompt("Enter server name:");
+    const name = await askInput("Create Server", "Enter server name");
 
     if (!name) {
         return;
@@ -448,13 +545,11 @@ async function createServer() {
 
     await loadServers();
 
-    // After creating, user can still choose freely.
-    // We do not auto-open the server.
     status.innerText = "Server created. Click it from the left side to open.";
 }
 
 async function joinServer() {
-    const inviteCode = prompt("Enter invite code:");
+    const inviteCode = await askInput("Join Server", "Enter invite code");
 
     if (!inviteCode) {
         return;
@@ -479,8 +574,6 @@ async function joinServer() {
 
     await loadServers();
 
-    // After joining by invite, user can still choose freely.
-    // We do not auto-open the server.
     status.innerText = "Server joined. Click it from the left side to open.";
 }
 
@@ -490,7 +583,7 @@ async function createVoiceChannel() {
         return;
     }
 
-    const name = prompt("Enter voice channel name:");
+    const name = await askInput("Create Voice Channel", "Enter voice channel name");
 
     if (!name) {
         return;
@@ -525,6 +618,10 @@ async function createVoiceChannel() {
     });
 
     renderChannels();
+
+    socket.emit("watch-server", {
+        serverId: activeServer._id
+    });
 }
 
 /* ================= HOME VIEW / SERVER UI ================= */
@@ -533,9 +630,12 @@ function showHomeView(leaveVoice) {
         leaveCurrentVoice(false);
     }
 
+    socket.emit("unwatch-server");
+
     activeServer = null;
     activeVoiceChannel = null;
     currentVoiceUsers = [];
+    serverChannelUsers = {};
 
     activeServerName.innerText = "Choose Server";
     inviteCodeText.innerText = "---";
@@ -597,12 +697,13 @@ function selectServer(serverId) {
     activeServer = found;
     activeVoiceChannel = null;
     currentVoiceUsers = [];
+    serverChannelUsers = {};
 
     activeServerName.innerText = activeServer.name;
     inviteCodeText.innerText = activeServer.inviteCode;
 
     mainTitle.innerText = activeServer.name;
-    mainSubtitle.innerText = "Click a voice channel to join automatically.";
+    mainSubtitle.innerText = "See who is inside each channel, then click a voice channel to join.";
 
     serverInfoTitle.innerText = activeServer.name;
     serverInfoText.innerText = "Invite code: " + activeServer.inviteCode;
@@ -615,6 +716,10 @@ function selectServer(serverId) {
     voiceStatusText.innerText = "Not connected to any channel";
 
     status.innerText = "Server opened: " + activeServer.name;
+
+    socket.emit("watch-server", {
+        serverId: activeServer._id
+    });
 }
 
 function renderLiveBadge(user) {
@@ -639,6 +744,53 @@ function renderMutedIcon(user) {
     icon.title = "Muted";
 
     return icon;
+}
+
+function getUsersForChannel(channelId) {
+    if (serverChannelUsers[channelId]) {
+        return serverChannelUsers[channelId];
+    }
+
+    return [];
+}
+
+function renderUserRowForChannel(user, channelId) {
+    const userDiv = document.createElement("div");
+    userDiv.className = "voice-user-row";
+
+    const nameSpan = document.createElement("span");
+    nameSpan.textContent =
+        user.username + (user.id === socket.id ? " (You)" : "");
+
+    userDiv.appendChild(nameSpan);
+
+    const liveBadge = renderLiveBadge(user);
+
+    if (liveBadge) {
+        userDiv.appendChild(liveBadge);
+    }
+
+    const muteIcon = renderMutedIcon(user);
+
+    if (muteIcon) {
+        userDiv.appendChild(muteIcon);
+    }
+
+    if (user.id !== socket.id) {
+        userDiv.title = "Right click for volume. Join same channel to watch stream.";
+
+        userDiv.onclick = (event) => {
+            if (streamingUsers[user.id] || user.isStreaming) {
+                showUserVolumeMenu(event, user);
+            }
+        };
+
+        userDiv.oncontextmenu = (event) => {
+            showUserVolumeMenu(event, user);
+        };
+    }
+
+    return userDiv;
 }
 
 function renderChannels() {
@@ -671,8 +823,12 @@ function renderChannels() {
             div.classList.add("active-voice");
         }
 
+        const channelUsers = getUsersForChannel(channel.id);
+        const countText = channelUsers.length > 0 ? channelUsers.length : "";
+
         div.innerHTML = `
             <span>🔊 ${channel.name}</span>
+            <span class="channel-user-count">${countText}</span>
         `;
 
         div.onclick = async () => {
@@ -681,51 +837,21 @@ function renderChannels() {
 
         wrapper.appendChild(div);
 
-        if (activeVoiceChannel && activeVoiceChannel.id === channel.id) {
-            const usersBox = document.createElement("div");
-            usersBox.className = "voice-users";
+        const usersBox = document.createElement("div");
+        usersBox.className = "voice-users";
 
-            currentVoiceUsers.forEach((user) => {
-                const userDiv = document.createElement("div");
-                userDiv.className = "voice-user-row";
-
-                const nameSpan = document.createElement("span");
-                nameSpan.textContent =
-                    user.username + (user.id === socket.id ? " (You)" : "");
-
-                userDiv.appendChild(nameSpan);
-
-                const liveBadge = renderLiveBadge(user);
-
-                if (liveBadge) {
-                    userDiv.appendChild(liveBadge);
-                }
-
-                const muteIcon = renderMutedIcon(user);
-
-                if (muteIcon) {
-                    userDiv.appendChild(muteIcon);
-                }
-
-                if (user.id !== socket.id) {
-                    userDiv.title = "Click LIVE user to watch stream, or right click for volume";
-
-                    userDiv.onclick = (event) => {
-                        if (streamingUsers[user.id] || user.isStreaming) {
-                            showUserVolumeMenu(event, user);
-                        }
-                    };
-
-                    userDiv.oncontextmenu = (event) => {
-                        showUserVolumeMenu(event, user);
-                    };
-                }
-
-                usersBox.appendChild(userDiv);
+        if (channelUsers.length > 0) {
+            channelUsers.forEach((user) => {
+                usersBox.appendChild(renderUserRowForChannel(user, channel.id));
             });
-
-            wrapper.appendChild(usersBox);
+        } else {
+            const emptyDiv = document.createElement("div");
+            emptyDiv.className = "voice-user-row empty-channel-row";
+            emptyDiv.textContent = "No users";
+            usersBox.appendChild(emptyDiv);
         }
+
+        wrapper.appendChild(usersBox);
 
         voiceChannelList.appendChild(wrapper);
     });
@@ -1332,6 +1458,28 @@ socket.on("user-left", ({ id }) => {
     removePeerAndMedia(id);
 });
 
+socket.on("server-channel-users", ({ serverId, channels }) => {
+    if (!activeServer || activeServer._id !== serverId) {
+        return;
+    }
+
+    serverChannelUsers = channels || {};
+
+    Object.values(serverChannelUsers).forEach((users) => {
+        users.forEach((user) => {
+            streamingUsers[user.id] = !!user.isStreaming;
+            mutedUsers[user.id] = !!user.isMuted;
+        });
+    });
+
+    if (activeVoiceChannel) {
+        currentVoiceUsers = serverChannelUsers[activeVoiceChannel.id] || [];
+    }
+
+    renderChannels();
+    renderCurrentUsers();
+});
+
 socket.on("user-stream-status", ({ id, isStreaming }) => {
     streamingUsers[id] = !!isStreaming;
 
@@ -1344,6 +1492,19 @@ socket.on("user-stream-status", ({ id, isStreaming }) => {
         }
 
         return user;
+    });
+
+    Object.keys(serverChannelUsers).forEach((channelId) => {
+        serverChannelUsers[channelId] = serverChannelUsers[channelId].map(user => {
+            if (user.id === id) {
+                return {
+                    ...user,
+                    isStreaming: !!isStreaming
+                };
+            }
+
+            return user;
+        });
     });
 
     if (!isStreaming) {
@@ -1370,8 +1531,25 @@ socket.on("user-mute-status", ({ id, isMuted }) => {
         return user;
     });
 
+    Object.keys(serverChannelUsers).forEach((channelId) => {
+        serverChannelUsers[channelId] = serverChannelUsers[channelId].map(user => {
+            if (user.id === id) {
+                return {
+                    ...user,
+                    isMuted: !!isMuted
+                };
+            }
+
+            return user;
+        });
+    });
+
     renderChannels();
     renderCurrentUsers();
+});
+
+socket.on("watch-server-error", (data) => {
+    console.error("WATCH SERVER ERROR:", data.message);
 });
 
 socket.on("offer", async ({ sender, offer }) => {
@@ -1432,6 +1610,10 @@ socket.on("voice-user-list", (users) => {
         mutedUsers[user.id] = !!user.isMuted;
     });
 
+    if (activeVoiceChannel) {
+        serverChannelUsers[activeVoiceChannel.id] = currentVoiceUsers;
+    }
+
     renderChannels();
     renderCurrentUsers();
 });
@@ -1443,6 +1625,10 @@ socket.on("user-list", (users) => {
         streamingUsers[user.id] = !!user.isStreaming;
         mutedUsers[user.id] = !!user.isMuted;
     });
+
+    if (activeVoiceChannel) {
+        serverChannelUsers[activeVoiceChannel.id] = currentVoiceUsers;
+    }
 
     renderChannels();
     renderCurrentUsers();
