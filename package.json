@@ -1,6 +1,6 @@
 {
   "name": "noxvoice",
-  "version": "1.0.2",
+  "version": "1.0.1",
   "description": "NoxVoice voice chat app",
   "main": "main.js",
   "author": "NoxVoice",
