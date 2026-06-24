@@ -1,4 +1,4 @@
-console.log("NOXVOICE APP LOADED - FINAL KEEP VOICE GEAR NOISE FIX");
+console.log("NOXVOICE APP LOADED - STREAM CONNECTED STATE FIX");
 
 const socket = io();
 
@@ -2208,8 +2208,48 @@ streamBtn.onclick = async () => {
     }
 };
 
+
+function isActuallyConnectedToVoice() {
+    if (hasJoinedVoice) {
+        return true;
+    }
+
+    if (
+        voiceStatusTitle &&
+        String(voiceStatusTitle.innerText || "").toLowerCase().includes("voice connected")
+    ) {
+        return true;
+    }
+
+    if (
+        activeVoiceChannel &&
+        currentVoiceUsers &&
+        currentVoiceUsers.some((user) => user.id === socket.id)
+    ) {
+        return true;
+    }
+
+    return false;
+}
+
+function repairConnectedVoiceState() {
+    if (!connectedVoiceServer && activeServer) {
+        connectedVoiceServer = activeServer;
+    }
+
+    if (!connectedVoiceChannel && activeVoiceChannel) {
+        connectedVoiceChannel = activeVoiceChannel;
+    }
+
+    if (isActuallyConnectedToVoice()) {
+        hasJoinedVoice = true;
+    }
+}
+
 async function startScreenStream() {
-    if (!hasJoinedVoice || !connectedVoiceServer || !connectedVoiceChannel) {
+    repairConnectedVoiceState();
+
+    if (!isActuallyConnectedToVoice()) {
         alert("Join a voice channel first before starting stream.");
         return;
     }
@@ -2499,6 +2539,17 @@ socket.on("user-left", ({ id }) => {
 socket.on("voice-joined-confirmed", ({ serverId, channelId, users }) => {
     if (!activeServer || activeServer._id !== serverId) {
         return;
+    }
+
+    hasJoinedVoice = true;
+    connectedVoiceServer = activeServer;
+
+    if (activeVoiceChannel && activeVoiceChannel.id === channelId) {
+        connectedVoiceChannel = activeVoiceChannel;
+    } else if (activeServer && activeServer.channels) {
+        connectedVoiceChannel = activeServer.channels.find((channel) => {
+            return channel.id === channelId;
+        }) || activeVoiceChannel;
     }
 
     currentVoiceUsers = users || [];
