@@ -1,4 +1,4 @@
-console.log("NOXVOICE APP LOADED - KEEP VOICE WHEN SWITCHING SERVER HOME");
+console.log("NOXVOICE APP LOADED - KEEP VOICE WHEN SWITCHING SERVERS FINAL");
 
 const socket = io();
 
@@ -1485,7 +1485,10 @@ function selectServer(serverId) {
         return;
     }
 
-    // Do not leave voice when browsing/clicking another server.
+    // IMPORTANT:
+    // Do NOT call leaveCurrentVoice() here.
+    // Clicking another server should only change the view, not disconnect voice.
+
     activeServer = found;
     activeVoiceChannel = null;
     currentVoiceUsers = [];
@@ -1504,8 +1507,13 @@ function selectServer(serverId) {
     renderChannels();
     renderCurrentUsers();
 
-    voiceStatusTitle.innerText = "Voice Disconnected";
-    voiceStatusText.innerText = "Not connected to any channel";
+    if (hasJoinedVoice && connectedVoiceServer && connectedVoiceChannel) {
+        voiceStatusTitle.innerText = "Voice Connected";
+        voiceStatusText.innerText = connectedVoiceChannel.name + " / " + connectedVoiceServer.name;
+    } else {
+        voiceStatusTitle.innerText = "Voice Disconnected";
+        voiceStatusText.innerText = "Not connected to any channel";
+    }
 
     status.innerText = "Server opened: " + activeServer.name;
 
@@ -1845,6 +1853,8 @@ function leaveCurrentVoice(updateUi) {
 
     currentVoiceUsers = [];
     hasJoinedVoice = false;
+    connectedVoiceServer = null;
+    connectedVoiceChannel = null;
     connectedVoiceServer = null;
     connectedVoiceChannel = null;
 
