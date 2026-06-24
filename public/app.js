@@ -1409,7 +1409,7 @@ async function createVoiceChannel() {
 /* ================= HOME VIEW / SERVER UI ================= */
 function showHomeView(leaveVoice) {
     if (leaveVoice) {
-        leaveCurrentVoice(false);
+        //leaveCurrentVoice(false);
     }
 
     socket.emit("unwatch-server");
@@ -1433,10 +1433,10 @@ function showHomeView(leaveVoice) {
 
     serverInfoTitle.innerText = "No server selected";
     serverInfoText.innerText = "Click a server icon from the left side to open it.";
-
+	if(!hasJoinedVoice){
     voiceStatusTitle.innerText = "Voice Disconnected";
     voiceStatusText.innerText = "Not connected to any channel";
-
+	}
     status.innerText = "Choose a server";
 
     renderServerList();
@@ -2766,6 +2766,6 @@ createVoiceChannelBtn.onclick = createVoiceChannel;
 
 if (homeServerBtn) {
     homeServerBtn.onclick = () => {
-        showHomeView(true);
+        showHomeView(false);
     };
 }
