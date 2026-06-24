@@ -1266,3 +1266,12 @@ body {
     align-items: center;
     gap: 4px;
 }
+/* Move settings gear near Voice Connected area */
+.settings-floating-btn {
+    right: auto !important;
+    left: 285px !important;
+    bottom: 18px !important;
+    width: 44px !important;
+    height: 44px !important;
+    z-index: 999999 !important;
+}
