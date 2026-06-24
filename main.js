@@ -2,12 +2,10 @@ const {
     app,
     BrowserWindow,
     session,
-    ipcMain,
     dialog,
     desktopCapturer
 } = require("electron");
 
-const path = require("path");
 const { autoUpdater } = require("electron-updater");
 
 const APP_URL = "https://noxvoice.onrender.com";
@@ -15,50 +13,101 @@ const APP_URL = "https://noxvoice.onrender.com";
 let mainWindow = null;
 let updateWindow = null;
 
-/* ================= SCREEN SHARE PERMISSION ================= */
+/* ================= WINDOW / SCREEN STREAM PICKER ================= */
+
+function shortName(name) {
+    const clean = String(name || "Unknown").trim();
+
+    if (clean.length > 36) {
+        return clean.slice(0, 33) + "...";
+    }
+
+    return clean;
+}
+
+async function chooseStreamSource(sources) {
+    if (!mainWindow || mainWindow.isDestroyed()) {
+        return sources[0] || null;
+    }
+
+    const buttons = sources.map((source) => {
+        const isWindow = String(source.id || "").startsWith("window");
+        const label = isWindow ? "Window: " : "Screen: ";
+
+        return label + shortName(source.name);
+    });
+
+    buttons.push("Cancel");
+
+    const result = await dialog.showMessageBox(mainWindow, {
+        type: "question",
+        title: "NoxVoice Stream",
+        message: "Choose what you want to stream",
+        detail: "Choose a specific window or screen. Audio uses system loopback audio.",
+        buttons: buttons,
+        cancelId: buttons.length - 1,
+        defaultId: 0,
+        noLink: true
+    });
+
+    if (result.response === buttons.length - 1) {
+        return null;
+    }
+
+    return sources[result.response] || null;
+}
 
 function setupScreenShareHandler() {
-    session.defaultSession.setDisplayMediaRequestHandler((request, callback) => {
-        desktopCapturer.getSources({
-            types: ["screen", "window"],
-            thumbnailSize: {
-                width: 320,
-                height: 180
-            },
-            fetchWindowIcons: true
-        }).then((sources) => {
+    session.defaultSession.setDisplayMediaRequestHandler(async (request, callback) => {
+        try {
+            const sources = await desktopCapturer.getSources({
+                types: ["window", "screen"],
+                thumbnailSize: {
+                    width: 320,
+                    height: 180
+                },
+                fetchWindowIcons: true
+            });
+
             if (!sources || sources.length === 0) {
-                console.log("No screen sources found");
                 callback({
                     video: null,
                     audio: null
                 });
+
                 return;
             }
 
-            const screenSource =
-                sources.find((source) => {
-                    return String(source.name || "").toLowerCase().includes("screen");
-                }) ||
-                sources.find((source) => {
-                    return String(source.id || "").toLowerCase().includes("screen");
-                }) ||
-                sources[0];
+            const selectedSource = await chooseStreamSource(sources);
 
-            console.log("Screen share source selected:", screenSource.name);
+            if (!selectedSource) {
+                callback({
+                    video: null,
+                    audio: null
+                });
+
+                return;
+            }
+
+            console.log(
+                "Selected stream source:",
+                selectedSource.name,
+                selectedSource.id
+            );
 
             callback({
-                video: screenSource,
+                video: selectedSource,
                 audio: "loopback"
             });
-        }).catch((err) => {
-            console.error("Screen share source error:", err);
+
+        } catch (err) {
+            console.error("Screen/window stream picker error:", err);
 
             callback({
                 video: null,
                 audio: null
             });
-        });
+        }
     });
 
     session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
@@ -232,7 +281,7 @@ function closeUpdateWindow() {
     updateWindow = null;
 }
 
-/* ================= MAIN APP WINDOW ================= */
+/* ================= MAIN WINDOW ================= */
 
 function createMainWindow() {
     mainWindow = new BrowserWindow({
@@ -271,12 +320,10 @@ function createMainWindow() {
 
     session.defaultSession.clearCache()
         .then(() => {
-            const freshUrl = APP_URL + "/?desktopFresh=" + Date.now();
-            mainWindow.loadURL(freshUrl);
+            mainWindow.loadURL(APP_URL + "/?desktopFresh=" + Date.now());
         })
         .catch(() => {
-            const freshUrl = APP_URL + "/?desktopFresh=" + Date.now();
-            mainWindow.loadURL(freshUrl);
+            mainWindow.loadURL(APP_URL + "/?desktopFresh=" + Date.now());
         });
 
     mainWindow.on("closed", () => {
@@ -310,7 +357,9 @@ function setupAutoUpdater() {
 
     autoUpdater.on("download-progress", (progress) => {
         const percent = Math.round(progress.percent || 0);
+
         sendUpdateStatus("Downloading update... " + percent + "%");
+
         console.log("Download progress:", percent + "%");
     });
 
