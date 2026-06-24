@@ -1,4 +1,4 @@
-console.log("NOXVOICE APP LOADED - KEEP VOICE WHEN SWITCHING SERVERS FINAL");
+console.log("NOXVOICE APP LOADED - SETTINGS GEAR FIX");
 
 const socket = io();
 
@@ -242,11 +242,9 @@ function updateSettingsButtonAvatar() {
         return;
     }
 
-    if (myAvatarData) {
-        settingsButton.innerHTML = `<img src="${myAvatarData}" alt="avatar">`;
-    } else {
-        settingsButton.innerHTML = "⚙️";
-    }
+    // Keep settings button as settings icon.
+    // Avatar should only show beside user names, not on the settings button.
+    settingsButton.innerHTML = "⚙️";
 }
 
 function closeSettingsModal() {
