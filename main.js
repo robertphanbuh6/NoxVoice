@@ -2,8 +2,9 @@ const {
     app,
     BrowserWindow,
     session,
-    ipcMain,
-    desktopCapturer
+    dialog,
+    desktopCapturer,
+    ipcMain
 } = require("electron");
 
 const { autoUpdater } = require("electron-updater");
@@ -14,7 +15,17 @@ let mainWindow = null;
 let updateWindow = null;
 let streamPickerWindow = null;
 
-/* ================= CUSTOM STREAM PICKER ================= */
+/* ================= WINDOW / SCREEN STREAM PICKER ================= */
+
+function shortName(name) {
+    const clean = String(name || "Unknown").trim();
+
+    if (clean.length <= 70) {
+        return clean;
+    }
+
+    return clean.slice(0, 67) + "...";
+}
 
 function getSourceType(source) {
     const id = String(source.id || "").toLowerCase();
@@ -26,31 +37,25 @@ function getSourceType(source) {
     return "Screen";
 }
 
-function createSourcePayload(sources) {
+function makeSourcePayload(sources) {
     return sources.map((source) => {
-        let thumbnail = "";
-
-        try {
-            if (source.thumbnail) {
-                thumbnail = source.thumbnail.toDataURL();
-            }
-        } catch (err) {
-            thumbnail = "";
-        }
-
         return {
             id: source.id,
             name: source.name || "Unknown",
-            type: getSourceType(source),
-            thumbnail: thumbnail
+            type: getSourceType(source)
         };
     });
 }
 
-function chooseStreamSource(sources) {
+async function chooseStreamSource(sources) {
     return new Promise((resolve) => {
         if (!sources || sources.length === 0) {
             resolve(null);
+            return;
+        }
+
+        if (!mainWindow || mainWindow.isDestroyed()) {
+            resolve(sources[0] || null);
             return;
         }
 
@@ -60,7 +65,7 @@ function chooseStreamSource(sources) {
         }
 
         const pickerId =
-            "stream-picker-" +
+            "nox-stream-picker-" +
             Date.now().toString() +
             "-" +
             Math.random().toString(16).slice(2);
@@ -70,7 +75,7 @@ function chooseStreamSource(sources) {
 
         let finished = false;
 
-        function finish(selectedSource) {
+        function finish(source) {
             if (finished) {
                 return;
             }
@@ -86,7 +91,7 @@ function chooseStreamSource(sources) {
 
             streamPickerWindow = null;
 
-            resolve(selectedSource || null);
+            resolve(source || null);
         }
 
         ipcMain.once(selectChannel, (event, sourceId) => {
@@ -101,21 +106,21 @@ function chooseStreamSource(sources) {
             finish(null);
         });
 
-        const payload = createSourcePayload(sources);
+        const payload = makeSourcePayload(sources);
 
         streamPickerWindow = new BrowserWindow({
-            width: 860,
-            height: 620,
-            minWidth: 720,
-            minHeight: 520,
-            parent: mainWindow || undefined,
+            width: 760,
+            height: 560,
+            minWidth: 680,
+            minHeight: 500,
+            parent: mainWindow,
             modal: true,
             frame: false,
             resizable: true,
             center: true,
             backgroundColor: "#11131a",
             show: false,
-            title: "Choose Stream",
+            title: "NoxVoice Stream Picker",
             webPreferences: {
                 nodeIntegration: true,
                 contextIsolation: false
@@ -149,27 +154,27 @@ function chooseStreamSource(sources) {
             width: 100vw;
             height: 100vh;
             background: #11131a;
-            color: #ffffff;
+            color: white;
             font-family: Arial, sans-serif;
             overflow: hidden;
         }
 
-        .window {
+        .app {
             width: 100%;
             height: 100%;
             display: flex;
             flex-direction: column;
             background:
-                radial-gradient(circle at top left, rgba(88, 101, 242, 0.24), transparent 34%),
-                linear-gradient(135deg, #11131a, #1d2232);
+                radial-gradient(circle at top left, rgba(88, 101, 242, 0.28), transparent 32%),
+                linear-gradient(135deg, #11131a, #1b2030);
         }
 
         .titlebar {
             height: 48px;
+            padding: 0 16px;
             display: flex;
             align-items: center;
             justify-content: space-between;
-            padding: 0 16px;
             border-bottom: 1px solid rgba(255, 255, 255, 0.08);
             -webkit-app-region: drag;
         }
@@ -178,34 +183,34 @@ function chooseStreamSource(sources) {
             display: flex;
             align-items: center;
             gap: 10px;
-            font-weight: 800;
             font-size: 15px;
+            font-weight: 800;
         }
 
         .logo {
-            width: 30px;
-            height: 30px;
-            border-radius: 10px;
+            width: 32px;
+            height: 32px;
+            border-radius: 11px;
             background: #5865f2;
             display: flex;
             align-items: center;
             justify-content: center;
-            box-shadow: 0 0 18px rgba(88, 101, 242, 0.45);
+            box-shadow: 0 0 22px rgba(88, 101, 242, 0.55);
         }
 
-        .close-btn {
+        .close {
             width: 34px;
             height: 30px;
-            border: none;
+            border: 0;
             border-radius: 8px;
+            color: #d5dbeb;
             background: transparent;
-            color: #cbd2e4;
             font-size: 18px;
             cursor: pointer;
             -webkit-app-region: no-drag;
         }
 
-        .close-btn:hover {
+        .close:hover {
             background: #ed4245;
             color: white;
         }
@@ -214,40 +219,39 @@ function chooseStreamSource(sources) {
             padding: 18px 22px 12px;
         }
 
-        .header h1 {
+        h1 {
             margin: 0 0 6px;
             font-size: 24px;
         }
 
-        .header p {
-            margin: 0;
+        .subtitle {
             color: #aeb7cf;
             font-size: 13px;
-            line-height: 1.5;
+            line-height: 1.45;
         }
 
         .toolbar {
             display: flex;
-            align-items: center;
             gap: 10px;
+            align-items: center;
             padding: 0 22px 14px;
         }
 
-        .tab-btn {
+        .tab {
+            height: 34px;
             border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 999px;
             background: rgba(255, 255, 255, 0.055);
             color: #dce2f3;
-            border-radius: 999px;
-            height: 34px;
             padding: 0 14px;
+            font-weight: 800;
             cursor: pointer;
-            font-weight: 700;
         }
 
-        .tab-btn.active {
+        .tab.active {
             background: #5865f2;
             border-color: #5865f2;
-            color: #ffffff;
+            color: white;
         }
 
         .search {
@@ -255,7 +259,7 @@ function chooseStreamSource(sources) {
             height: 34px;
             border: 1px solid rgba(255, 255, 255, 0.1);
             border-radius: 9px;
-            background: rgba(0, 0, 0, 0.22);
+            background: rgba(0, 0, 0, 0.24);
             color: white;
             outline: none;
             padding: 0 12px;
@@ -267,77 +271,78 @@ function chooseStreamSource(sources) {
             padding: 0 22px 16px;
         }
 
-        .grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
-            gap: 14px;
-            padding-bottom: 8px;
+        .list {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
         }
 
-        .card {
+        .source {
+            display: grid;
+            grid-template-columns: 52px 1fr auto;
+            align-items: center;
+            gap: 12px;
+            padding: 12px;
+            border-radius: 14px;
             border: 2px solid rgba(255, 255, 255, 0.08);
             background: rgba(0, 0, 0, 0.22);
-            border-radius: 14px;
-            overflow: hidden;
             cursor: pointer;
             transition: 0.12s ease;
         }
 
-        .card:hover {
-            transform: translateY(-2px);
+        .source:hover {
             border-color: rgba(88, 101, 242, 0.75);
-            background: rgba(88, 101, 242, 0.12);
+            background: rgba(88, 101, 242, 0.13);
+            transform: translateY(-1px);
         }
 
-        .card.selected {
+        .source.selected {
             border-color: #5865f2;
             box-shadow: 0 0 0 3px rgba(88, 101, 242, 0.25);
             background: rgba(88, 101, 242, 0.18);
         }
 
-        .thumb-wrap {
-            height: 118px;
-            background: #05060a;
+        .icon {
+            width: 52px;
+            height: 44px;
+            border-radius: 12px;
+            background: #0b0d14;
             display: flex;
             align-items: center;
             justify-content: center;
-            overflow: hidden;
-        }
-
-        .thumb {
-            width: 100%;
-            height: 100%;
-            object-fit: cover;
-        }
-
-        .thumb-empty {
-            color: #7f8aa7;
-            font-size: 38px;
-        }
-
-        .card-info {
-            padding: 10px;
-        }
-
-        .type {
-            display: inline-flex;
-            align-items: center;
-            height: 20px;
-            padding: 0 8px;
-            border-radius: 999px;
-            background: rgba(88, 101, 242, 0.2);
-            color: #d9defc;
-            font-size: 11px;
-            font-weight: 800;
-            margin-bottom: 7px;
+            font-size: 23px;
+            color: #dfe4ff;
         }
 
         .name {
-            font-size: 13px;
-            line-height: 1.35;
-            color: #ffffff;
-            min-height: 36px;
+            font-size: 15px;
+            font-weight: 800;
+            color: white;
             word-break: break-word;
+        }
+
+        .meta {
+            font-size: 12px;
+            color: #aeb7cf;
+            margin-top: 4px;
+        }
+
+        .badge {
+            height: 26px;
+            border-radius: 999px;
+            background: rgba(88, 101, 242, 0.22);
+            color: #dce2ff;
+            padding: 0 10px;
+            display: flex;
+            align-items: center;
+            font-size: 12px;
+            font-weight: 900;
+        }
+
+        .empty {
+            text-align: center;
+            padding: 45px 0;
+            color: #aeb7cf;
         }
 
         .footer {
@@ -348,18 +353,17 @@ function chooseStreamSource(sources) {
             gap: 12px;
             padding: 0 22px;
             border-top: 1px solid rgba(255, 255, 255, 0.08);
-            background: rgba(10, 12, 19, 0.74);
+            background: rgba(10, 12, 19, 0.72);
         }
 
-        .hint {
+        .tip {
             color: #aeb7cf;
             font-size: 12px;
             line-height: 1.4;
         }
 
-        .actions {
+        .buttons {
             display: flex;
-            align-items: center;
             gap: 10px;
         }
 
@@ -367,10 +371,10 @@ function chooseStreamSource(sources) {
         .start {
             height: 40px;
             min-width: 112px;
-            border: none;
+            border: 0;
             border-radius: 10px;
             color: white;
-            font-weight: 800;
+            font-weight: 900;
             cursor: pointer;
             padding: 0 16px;
         }
@@ -396,13 +400,6 @@ function chooseStreamSource(sources) {
             cursor: not-allowed;
         }
 
-        .empty {
-            text-align: center;
-            color: #aeb7cf;
-            padding: 45px 0;
-            font-size: 14px;
-        }
-
         ::-webkit-scrollbar {
             width: 10px;
         }
@@ -418,36 +415,39 @@ function chooseStreamSource(sources) {
     </style>
 </head>
 <body>
-    <div class="window">
+    <div class="app">
         <div class="titlebar">
             <div class="brand">
                 <div class="logo">🎧</div>
                 <div>NoxVoice Stream</div>
             </div>
-            <button class="close-btn" id="closeBtn">×</button>
+            <button class="close" id="closeBtn">×</button>
         </div>
 
         <div class="header">
             <h1>Choose what to stream</h1>
-            <p>Select a specific window or your entire screen. Audio uses system loopback audio, so use headphones to avoid echo.</p>
+            <div class="subtitle">
+                Select a specific game/window or your entire screen. Audio uses system loopback audio.
+            </div>
         </div>
 
         <div class="toolbar">
-            <button class="tab-btn active" data-filter="All">All</button>
-            <button class="tab-btn" data-filter="Window">Windows</button>
-            <button class="tab-btn" data-filter="Screen">Screens</button>
-            <input class="search" id="searchInput" placeholder="Search windows..." />
+            <button class="tab active" data-filter="All">All</button>
+            <button class="tab" data-filter="Window">Windows</button>
+            <button class="tab" data-filter="Screen">Screens</button>
+            <input id="search" class="search" placeholder="Search game or window..." />
         </div>
 
         <div class="content">
-            <div class="grid" id="grid"></div>
+            <div id="list" class="list"></div>
         </div>
 
         <div class="footer">
-            <div class="hint">
-                Tip: choose the game/app window, not NoxVoice, to avoid mirror effect.
+            <div class="tip">
+                Tip: choose the game window if available. For fullscreen games, choose Entire Screen.
             </div>
-            <div class="actions">
+
+            <div class="buttons">
                 <button class="cancel" id="cancelBtn">Cancel</button>
                 <button class="start" id="startBtn" disabled>Start Stream</button>
             </div>
@@ -462,109 +462,112 @@ function chooseStreamSource(sources) {
         const cancelChannel = ${JSON.stringify(cancelChannel)};
 
         let selectedId = "";
-        let currentFilter = "All";
+        let filter = "All";
 
-        const grid = document.getElementById("grid");
-        const searchInput = document.getElementById("searchInput");
+        const list = document.getElementById("list");
+        const search = document.getElementById("search");
         const startBtn = document.getElementById("startBtn");
         const cancelBtn = document.getElementById("cancelBtn");
         const closeBtn = document.getElementById("closeBtn");
 
-        function matchesFilter(source) {
-            const query = searchInput.value.trim().toLowerCase();
+        function iconFor(source) {
+            return source.type === "Window" ? "▣" : "🖥️";
+        }
 
-            if (currentFilter !== "All" && source.type !== currentFilter) {
-                return false;
-            }
+        function visibleSources() {
+            const q = search.value.trim().toLowerCase();
 
-            if (query && !source.name.toLowerCase().includes(query)) {
-                return false;
-            }
+            return sources.filter((source) => {
+                if (filter !== "All" && source.type !== filter) {
+                    return false;
+                }
 
-            return true;
+                if (q && !source.name.toLowerCase().includes(q)) {
+                    return false;
+                }
+
+                return true;
+            });
         }
 
         function render() {
-            grid.innerHTML = "";
+            list.innerHTML = "";
 
-            const filtered = sources.filter(matchesFilter);
+            const visible = visibleSources();
 
-            if (filtered.length === 0) {
+            if (visible.length === 0) {
                 const empty = document.createElement("div");
                 empty.className = "empty";
-                empty.innerText = "No windows found.";
-                grid.appendChild(empty);
+                empty.innerText = "No matching windows found.";
+                list.appendChild(empty);
                 return;
             }
 
-            filtered.forEach((source) => {
-                const card = document.createElement("div");
-                card.className = "card";
+            visible.forEach((source) => {
+                const row = document.createElement("div");
+                row.className = "source";
 
                 if (source.id === selectedId) {
-                    card.classList.add("selected");
+                    row.classList.add("selected");
                 }
 
-                card.onclick = () => {
+                row.onclick = () => {
                     selectedId = source.id;
                     startBtn.disabled = false;
                     render();
                 };
 
-                card.ondblclick = () => {
-                    selectedId = source.id;
-                    ipcRenderer.send(selectChannel, selectedId);
+                row.ondblclick = () => {
+                    ipcRenderer.send(selectChannel, source.id);
                 };
 
-                const thumbWrap = document.createElement("div");
-                thumbWrap.className = "thumb-wrap";
+                const icon = document.createElement("div");
+                icon.className = "icon";
+                icon.innerText = iconFor(source);
 
-                if (source.thumbnail) {
-                    const img = document.createElement("img");
-                    img.className = "thumb";
-                    img.src = source.thumbnail;
-                    thumbWrap.appendChild(img);
-                } else {
-                    const icon = document.createElement("div");
-                    icon.className = "thumb-empty";
-                    icon.innerText = source.type === "Window" ? "▣" : "🖥️";
-                    thumbWrap.appendChild(icon);
-                }
-
-                const info = document.createElement("div");
-                info.className = "card-info";
-
-                const type = document.createElement("div");
-                type.className = "type";
-                type.innerText = source.type;
+                const text = document.createElement("div");
 
                 const name = document.createElement("div");
                 name.className = "name";
                 name.innerText = source.name;
 
-                info.appendChild(type);
-                info.appendChild(name);
+                const meta = document.createElement("div");
+                meta.className = "meta";
 
-                card.appendChild(thumbWrap);
-                card.appendChild(info);
+                if (source.type === "Window") {
+                    meta.innerText = "Specific window / game capture";
+                } else {
+                    meta.innerText = "Entire screen capture";
+                }
 
-                grid.appendChild(card);
+                text.appendChild(name);
+                text.appendChild(meta);
+
+                const badge = document.createElement("div");
+                badge.className = "badge";
+                badge.innerText = source.type;
+
+                row.appendChild(icon);
+                row.appendChild(text);
+                row.appendChild(badge);
+
+                list.appendChild(row);
             });
         }
 
-        document.querySelectorAll(".tab-btn").forEach((btn) => {
+        document.querySelectorAll(".tab").forEach((btn) => {
             btn.onclick = () => {
-                document.querySelectorAll(".tab-btn").forEach((other) => {
+                document.querySelectorAll(".tab").forEach((other) => {
                     other.classList.remove("active");
                 });
 
                 btn.classList.add("active");
-                currentFilter = btn.dataset.filter;
+                filter = btn.dataset.filter;
                 render();
             };
         });
 
-        searchInput.oninput = render;
+        search.oninput = render;
 
         startBtn.onclick = () => {
             if (!selectedId) {
@@ -605,18 +608,18 @@ function chooseStreamSource(sources) {
     });
 }
 
-/* ================= SCREEN SHARE HANDLER ================= */
-
 function setupScreenShareHandler() {
     session.defaultSession.setDisplayMediaRequestHandler(async (request, callback) => {
         try {
             const sources = await desktopCapturer.getSources({
                 types: ["window", "screen"],
-                thumbnailSize: {
-                    width: 420,
-                    height: 260
-                },
-                fetchWindowIcons: true
+                thumbnailSize: { width: 0, height: 0 },
+                fetchWindowIcons: false
+            });
+
+            console.log("Available stream sources:");
+            sources.forEach((source, index) => {
+                console.log(index + ":", source.id, source.name);
             });
 
             if (!sources || sources.length === 0) {
@@ -624,7 +627,6 @@ function setupScreenShareHandler() {
                     video: null,
                     audio: null
                 });
-
                 return;
             }
 
@@ -635,14 +637,16 @@ function setupScreenShareHandler() {
                     video: null,
                     audio: null
                 });
-
                 return;
             }
 
-            console.log("Selected stream source:", selectedSource.name, selectedSource.id);
+            console.log("Available stream source selected:", selectedSource.id, selectedSource.name);
 
             callback({
-                video: selectedSource,
+                video: {
+                    id: selectedSource.id,
+                    name: selectedSource.name
+                },
                 audio: "loopback"
             });
 
@@ -700,10 +704,7 @@ function createUpdateWindow() {
                 <meta charset="UTF-8">
                 <title>NoxVoice Update</title>
                 <style>
-                    * {
-                        box-sizing: border-box;
-                    }
-
+                    * { box-sizing: border-box; }
                     body {
                         margin: 0;
                         width: 100vw;
@@ -716,13 +717,11 @@ function createUpdateWindow() {
                         justify-content: center;
                         overflow: hidden;
                     }
-
                     .box {
                         width: 100%;
                         text-align: center;
                         padding: 24px;
                     }
-
                     .logo {
                         width: 74px;
                         height: 74px;
@@ -735,18 +734,15 @@ function createUpdateWindow() {
                         font-size: 34px;
                         box-shadow: 0 0 28px rgba(88, 101, 242, 0.65);
                     }
-
                     h1 {
                         font-size: 24px;
                         margin: 0 0 10px;
                     }
-
                     p {
                         margin: 0;
                         color: #c9d0e3;
                         font-size: 14px;
                     }
-
                     .bar {
                         width: 100%;
                         height: 8px;
@@ -755,7 +751,6 @@ function createUpdateWindow() {
                         overflow: hidden;
                         margin-top: 22px;
                     }
-
                     .fill {
                         width: 35%;
                         height: 100%;
@@ -763,21 +758,11 @@ function createUpdateWindow() {
                         border-radius: 99px;
                         animation: move 1.2s infinite ease-in-out;
                     }
-
                     @keyframes move {
-                        0% {
-                            transform: translateX(-100%);
-                        }
-
-                        50% {
-                            transform: translateX(120%);
-                        }
-
-                        100% {
-                            transform: translateX(320%);
-                        }
+                        0% { transform: translateX(-100%); }
+                        50% { transform: translateX(120%); }
+                        100% { transform: translateX(320%); }
                     }
-
                     .small {
                         margin-top: 12px;
                         font-size: 12px;
@@ -790,15 +775,11 @@ function createUpdateWindow() {
                     <div class="logo">🎧</div>
                     <h1>NoxVoice</h1>
                     <p id="status">Checking for updates...</p>
-                    <div class="bar">
-                        <div class="fill"></div>
-                    </div>
+                    <div class="bar"><div class="fill"></div></div>
                     <div class="small">Please wait before login</div>
                 </div>
-
                 <script>
                     const { ipcRenderer } = require("electron");
-
                     ipcRenderer.on("update-status", function(event, message) {
                         document.getElementById("status").innerText = message;
                     });
@@ -895,7 +876,6 @@ function setupAutoUpdater() {
 
     autoUpdater.on("update-not-available", () => {
         sendUpdateStatus("No update found. Opening NoxVoice...");
-
         setTimeout(() => {
             createMainWindow();
         }, 900);
@@ -903,15 +883,12 @@ function setupAutoUpdater() {
 
     autoUpdater.on("download-progress", (progress) => {
         const percent = Math.round(progress.percent || 0);
-
         sendUpdateStatus("Downloading update... " + percent + "%");
-
         console.log("Download progress:", percent + "%");
     });
 
     autoUpdater.on("update-downloaded", () => {
         sendUpdateStatus("Update ready. Restarting NoxVoice...");
-
         setTimeout(() => {
             autoUpdater.quitAndInstall(false, true);
         }, 1200);
@@ -919,9 +896,7 @@ function setupAutoUpdater() {
 
     autoUpdater.on("error", (err) => {
         console.error("Auto updater error:", err);
-
         sendUpdateStatus("Could not check update. Opening NoxVoice...");
-
         setTimeout(() => {
             createMainWindow();
         }, 1200);
@@ -938,7 +913,6 @@ function checkForUpdatesBeforeLogin() {
         }, 800);
     } else {
         sendUpdateStatus("Development mode. Opening NoxVoice...");
-
         setTimeout(() => {
             createMainWindow();
         }, 900);
