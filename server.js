@@ -20,7 +20,6 @@ const io = new Server(server, {
 
 const publicPath = path.join(__dirname, "public");
 
-/* IMPORTANT: avatar upload needs bigger JSON limit */
 app.use(express.json({
     limit: "2mb"
 }));
@@ -360,7 +359,7 @@ app.get("/api/me", (req, res) => {
     });
 });
 
-/* ================= PROFILE / AVATAR ROUTES ================= */
+/* ================= PROFILE ROUTES ================= */
 
 app.get("/api/profile", requireApiLogin, async (req, res) => {
     try {
@@ -533,12 +532,8 @@ app.post("/api/servers/join", requireApiLogin, async (req, res) => {
 
         const foundServer = await VoiceServer.findOne({
             $or: [
-                {
-                    inviteCode: code
-                },
-                {
-                    _id: mongoose.Types.ObjectId.isValid(code) ? code : null
-                }
+                { inviteCode: code },
+                { _id: mongoose.Types.ObjectId.isValid(code) ? code : null }
             ]
         });
 
@@ -1045,6 +1040,17 @@ io.on("connection", async (socket) => {
                 emitServerChannelUsers(socket.currentServerId);
             }
         }
+    });
+
+    socket.on("request-offer", ({ target }) => {
+        if (!target) {
+            return;
+        }
+
+        io.to(target).emit("request-offer", {
+            sender: socket.id,
+            username: socket.username
+        });
     });
 
     socket.on("offer", (data) => {

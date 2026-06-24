@@ -1,4 +1,4 @@
-console.log("NOXVOICE APP LOADED - STOP STREAM ON LEAVE VOICE");
+console.log("NOXVOICE APP LOADED - MULTI USER VOICE RECONNECT FIX");
 
 const socket = io();
 
@@ -70,6 +70,7 @@ let connectedVoiceServer = null;
 let connectedVoiceChannel = null;
 
 const peers = {};
+const peerReconnectTimers = {};
 const userVolumes = {};
 const userMuted = {};
 const streamingUsers = {};
@@ -2421,6 +2422,37 @@ function createPeer(id) {
 
     peer.oniceconnectionstatechange = () => {
         console.log("ICE STATE [" + id + "]:", peer.iceConnectionState);
+
+        if (peer.iceConnectionState === "connected" || peer.iceConnectionState === "completed") {
+            if (peerReconnectTimers[id]) {
+                clearTimeout(peerReconnectTimers[id]);
+                delete peerReconnectTimers[id];
+            }
+        }
+
+        if (peer.iceConnectionState === "failed") {
+            restartPeerConnection(id);
+        }
+
+        if (peer.iceConnectionState === "disconnected") {
+            if (peerReconnectTimers[id]) {
+                clearTimeout(peerReconnectTimers[id]);
+            }
+
+            peerReconnectTimers[id] = setTimeout(() => {
+                const currentPeer = peers[id];
+
+                if (
+                    currentPeer &&
+                    (
+                        currentPeer.iceConnectionState === "disconnected" ||
+                        currentPeer.iceConnectionState === "failed"
+                    )
+                ) {
+                    restartPeerConnection(id);
+                }
+            }, 4000);
+        }
     };
 
     peer.ontrack = (event) => {
@@ -2543,6 +2575,65 @@ function handleRemoteVideo(id, event) {
     };
 }
 
+
+async function sendOfferToUser(targetId) {
+    if (!targetId || targetId === socket.id) {
+        return;
+    }
+
+    if (!micReady) {
+        return;
+    }
+
+    const peer = createPeer(targetId);
+
+    try {
+        const offer = await peer.createOffer({
+            offerToReceiveAudio: true,
+            offerToReceiveVideo: true
+        });
+
+        await peer.setLocalDescription(offer);
+
+        socket.emit("offer", {
+            target: targetId,
+            offer: offer
+        });
+
+    } catch (err) {
+        console.error("SEND OFFER ERROR:", err);
+    }
+}
+
+function restartPeerConnection(id) {
+    if (!id || id === socket.id) {
+        return;
+    }
+
+    console.log("Restarting peer connection:", id);
+
+    removePeerAndMedia(id);
+
+    setTimeout(() => {
+        sendOfferToUser(id);
+    }, 700);
+}
+
+function requestOffersFromExistingUsers() {
+    if (!currentVoiceUsers || currentVoiceUsers.length === 0) {
+        return;
+    }
+
+    currentVoiceUsers.forEach((user) => {
+        if (user.id !== socket.id) {
+            socket.emit("request-offer", {
+                target: user.id
+            });
+        }
+    });
+}
+
+
 /* ================= SOCKET VOICE EVENTS ================= */
 socket.on("user-joined", async (user) => {
     if (user.id === socket.id) {
@@ -2555,21 +2646,9 @@ socket.on("user-joined", async (user) => {
         return;
     }
 
-    const peer = createPeer(user.id);
-
-    try {
-        const offer = await peer.createOffer();
-
-        await peer.setLocalDescription(offer);
-
-        socket.emit("offer", {
-            target: user.id,
-            offer: offer
-        });
-
-    } catch (err) {
-        console.error("OFFER ERROR:", err);
-    }
+    setTimeout(() => {
+        sendOfferToUser(user.id);
+    }, 500);
 });
 
 socket.on("user-left", ({ id }) => {
@@ -2585,6 +2664,20 @@ socket.on("user-left", ({ id }) => {
     removePeerAndMedia(id);
 
     refreshServerChannelUsers();
+});
+
+socket.on("request-offer", async ({ sender }) => {
+    if (!sender || sender === socket.id) {
+        return;
+    }
+
+    if (!micReady) {
+        return;
+    }
+
+    setTimeout(() => {
+        sendOfferToUser(sender);
+    }, 500);
 });
 
 socket.on("voice-joined-confirmed", ({ serverId, channelId, users }) => {
@@ -2639,6 +2732,10 @@ socket.on("voice-joined-confirmed", ({ serverId, channelId, users }) => {
         voiceStatusTitle.innerText = "Voice Connected";
         voiceStatusText.innerText = activeVoiceChannel.name + " / " + activeServer.name;
     }
+
+    setTimeout(() => {
+        requestOffersFromExistingUsers();
+    }, 900);
 
     refreshServerChannelUsers();
 });
@@ -3006,6 +3103,11 @@ function renderCurrentUsers() {
 
 /* ================= CLEANUP ================= */
 function removePeerAndMedia(id) {
+    if (peerReconnectTimers[id]) {
+        clearTimeout(peerReconnectTimers[id]);
+        delete peerReconnectTimers[id];
+    }
+
     if (peers[id]) {
         peers[id].close();
         delete peers[id];
