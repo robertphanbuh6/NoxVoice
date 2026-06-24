@@ -1,4 +1,4 @@
-console.log("NOXVOICE APP LOADED - SETTINGS AVATAR SHORTCUTS SPEAKING GLOW SELF FIX");
+console.log("NOXVOICE APP LOADED - KEEP VOICE WHEN SWITCHING SERVER HOME");
 
 const socket = io();
 
@@ -53,6 +53,10 @@ let micReady = false;
 let muted = false;
 let isStreaming = false;
 let hasJoinedVoice = false;
+
+/* Keep voice connection separate from the server you are browsing */
+let connectedVoiceServer = null;
+let connectedVoiceChannel = null;
 
 const peers = {};
 const userVolumes = {};
@@ -1409,7 +1413,7 @@ async function createVoiceChannel() {
 /* ================= HOME VIEW / SERVER UI ================= */
 function showHomeView(leaveVoice) {
     if (leaveVoice) {
-        //leaveCurrentVoice(false);
+        leaveCurrentVoice(false);
     }
 
     socket.emit("unwatch-server");
@@ -1433,10 +1437,15 @@ function showHomeView(leaveVoice) {
 
     serverInfoTitle.innerText = "No server selected";
     serverInfoText.innerText = "Click a server icon from the left side to open it.";
-	if(!hasJoinedVoice){
-    voiceStatusTitle.innerText = "Voice Disconnected";
-    voiceStatusText.innerText = "Not connected to any channel";
-	}
+
+    if (hasJoinedVoice && connectedVoiceServer && connectedVoiceChannel) {
+        voiceStatusTitle.innerText = "Voice Connected";
+        voiceStatusText.innerText = connectedVoiceChannel.name + " / " + connectedVoiceServer.name;
+    } else {
+        voiceStatusTitle.innerText = "Voice Disconnected";
+        voiceStatusText.innerText = "Not connected to any channel";
+    }
+
     status.innerText = "Choose a server";
 
     renderServerList();
@@ -1476,8 +1485,7 @@ function selectServer(serverId) {
         return;
     }
 
-    leaveCurrentVoice(false);
-
+    // Do not leave voice when browsing/clicking another server.
     activeServer = found;
     activeVoiceChannel = null;
     currentVoiceUsers = [];
@@ -1776,6 +1784,8 @@ function joinSelectedVoiceChannel() {
     resetRemoteMediaAndPeers();
 
     hasJoinedVoice = true;
+    connectedVoiceServer = activeServer;
+    connectedVoiceChannel = activeVoiceChannel;
 
     showSelfInActiveChannel();
 
@@ -1835,6 +1845,8 @@ function leaveCurrentVoice(updateUi) {
 
     currentVoiceUsers = [];
     hasJoinedVoice = false;
+    connectedVoiceServer = null;
+    connectedVoiceChannel = null;
 
     if (updateUi) {
         status.innerText = "Left voice channel";
@@ -2766,6 +2778,7 @@ createVoiceChannelBtn.onclick = createVoiceChannel;
 
 if (homeServerBtn) {
     homeServerBtn.onclick = () => {
+        // Home only changes the view. It should not disconnect voice.
         showHomeView(false);
     };
 }
