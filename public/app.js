@@ -1,4 +1,4 @@
-console.log("NOXVOICE APP LOADED - ENHANCED MIC NOISE CANCELLATION");
+console.log("NOXVOICE APP LOADED - FINAL KEEP VOICE GEAR NOISE FIX");
 
 const socket = io();
 
@@ -64,6 +64,10 @@ let micReady = false;
 let muted = false;
 let isStreaming = false;
 let hasJoinedVoice = false;
+
+/* Keep voice connection separate from the server you are browsing */
+let connectedVoiceServer = null;
+let connectedVoiceChannel = null;
 
 const peers = {};
 const userVolumes = {};
@@ -249,11 +253,9 @@ function updateSettingsButtonAvatar() {
         return;
     }
 
-    if (myAvatarData) {
-        settingsButton.innerHTML = `<img src="${myAvatarData}" alt="avatar">`;
-    } else {
-        settingsButton.innerHTML = "⚙️";
-    }
+    // Keep settings button as gear icon.
+    // Avatar should only show beside user names.
+    settingsButton.innerHTML = "⚙️";
 }
 
 function closeSettingsModal() {
@@ -1487,8 +1489,7 @@ function selectServer(serverId) {
         return;
     }
 
-    leaveCurrentVoice(false);
-
+    // Do not disconnect voice when browsing another server.
     activeServer = found;
     activeVoiceChannel = null;
     currentVoiceUsers = [];
@@ -1507,8 +1508,13 @@ function selectServer(serverId) {
     renderChannels();
     renderCurrentUsers();
 
-    voiceStatusTitle.innerText = "Voice Disconnected";
-    voiceStatusText.innerText = "Not connected to any channel";
+    if (hasJoinedVoice && connectedVoiceServer && connectedVoiceChannel) {
+        voiceStatusTitle.innerText = "Voice Connected";
+        voiceStatusText.innerText = connectedVoiceChannel.name + " / " + connectedVoiceServer.name;
+    } else {
+        voiceStatusTitle.innerText = "Voice Disconnected";
+        voiceStatusText.innerText = "Not connected to any channel";
+    }
 
     status.innerText = "Server opened: " + activeServer.name;
 
@@ -1746,16 +1752,19 @@ async function createBetterMicStream(rawStream) {
 
     micSourceNode = micAudioContext.createMediaStreamSource(rawStream);
 
+    // Removes low rumble / fan / table vibration
     micHighPassNode = micAudioContext.createBiquadFilter();
     micHighPassNode.type = "highpass";
     micHighPassNode.frequency.value = 90;
     micHighPassNode.Q.value = 0.7;
 
+    // Removes harsh high hiss
     micLowPassNode = micAudioContext.createBiquadFilter();
     micLowPassNode.type = "lowpass";
     micLowPassNode.frequency.value = 9000;
     micLowPassNode.Q.value = 0.7;
 
+    // Makes voice volume more stable
     micCompressorNode = micAudioContext.createDynamicsCompressor();
     micCompressorNode.threshold.value = -35;
     micCompressorNode.knee.value = 24;
@@ -1763,6 +1772,7 @@ async function createBetterMicStream(rawStream) {
     micCompressorNode.attack.value = 0.004;
     micCompressorNode.release.value = 0.18;
 
+    // Soft noise gate
     micGateNode = micAudioContext.createScriptProcessor(2048, 1, 1);
 
     let gateOpen = false;
@@ -1798,6 +1808,7 @@ async function createBetterMicStream(rawStream) {
             if (gateOpen) {
                 output[i] = input[i];
             } else {
+                // Do not fully cut audio, so the mic does not sound robotic
                 output[i] = input[i] * 0.10;
             }
         }
@@ -2198,7 +2209,21 @@ streamBtn.onclick = async () => {
 };
 
 async function startScreenStream() {
+    if (!hasJoinedVoice || !connectedVoiceServer || !connectedVoiceChannel) {
+        alert("Join a voice channel first before starting stream.");
+        return;
+    }
+
     try {
+        if (!micReady) {
+            const micOk = await enableMicIfNeeded();
+
+            if (!micOk) {
+                alert("Enable mic first before streaming.");
+                return;
+            }
+        }
+
         screenStream = await navigator.mediaDevices.getDisplayMedia({
             video: true,
             audio: true
@@ -2914,6 +2939,7 @@ createVoiceChannelBtn.onclick = createVoiceChannel;
 
 if (homeServerBtn) {
     homeServerBtn.onclick = () => {
-        showHomeView(true);
+        // Home only changes the view. It should not disconnect voice.
+        showHomeView(false);
     };
 }
