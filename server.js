@@ -20,7 +20,10 @@ const io = new Server(server, {
 
 const publicPath = path.join(__dirname, "public");
 
-app.use(express.json());
+/* IMPORTANT: avatar upload needs bigger JSON limit */
+app.use(express.json({
+    limit: "2mb"
+}));
 
 /* ================= MONGODB ================= */
 
@@ -55,6 +58,10 @@ const userSchema = new mongoose.Schema({
     password: {
         type: String,
         required: true
+    },
+    avatarData: {
+        type: String,
+        default: ""
     }
 }, {
     timestamps: true
@@ -258,7 +265,8 @@ app.post("/api/register", async (req, res) => {
         await User.create({
             username: username,
             usernameLower: usernameLower,
-            password: hashedPassword
+            password: hashedPassword,
+            avatarData: ""
         });
 
         req.session.user = {
@@ -350,6 +358,82 @@ app.get("/api/me", (req, res) => {
         loggedIn: true,
         username: req.session.user.username
     });
+});
+
+/* ================= PROFILE / AVATAR ROUTES ================= */
+
+app.get("/api/profile", requireApiLogin, async (req, res) => {
+    try {
+        const username = req.session.user.username;
+
+        const user = await User.findOne({
+            usernameLower: username.toLowerCase()
+        });
+
+        if (!user) {
+            return res.json({
+                success: false,
+                message: "User not found"
+            });
+        }
+
+        res.json({
+            success: true,
+            profile: {
+                username: user.username,
+                avatarData: user.avatarData || ""
+            }
+        });
+
+    } catch (err) {
+        console.error("GET PROFILE ERROR:", err);
+
+        res.json({
+            success: false,
+            message: "Could not load profile"
+        });
+    }
+});
+
+app.post("/api/profile/avatar", requireApiLogin, async (req, res) => {
+    try {
+        const username = req.session.user.username;
+        const avatarData = String(req.body.avatarData || "");
+
+        if (avatarData.length > 500000) {
+            return res.json({
+                success: false,
+                message: "Avatar image is too large"
+            });
+        }
+
+        const user = await User.findOne({
+            usernameLower: username.toLowerCase()
+        });
+
+        if (!user) {
+            return res.json({
+                success: false,
+                message: "User not found"
+            });
+        }
+
+        user.avatarData = avatarData;
+        await user.save();
+
+        res.json({
+            success: true,
+            avatarData: user.avatarData || ""
+        });
+
+    } catch (err) {
+        console.error("SAVE AVATAR ERROR:", err);
+
+        res.json({
+            success: false,
+            message: "Could not save avatar"
+        });
+    }
 });
 
 /* ================= SERVER / CHANNEL ROUTES ================= */
@@ -449,8 +533,12 @@ app.post("/api/servers/join", requireApiLogin, async (req, res) => {
 
         const foundServer = await VoiceServer.findOne({
             $or: [
-                { inviteCode: code },
-                { _id: mongoose.Types.ObjectId.isValid(code) ? code : null }
+                {
+                    inviteCode: code
+                },
+                {
+                    _id: mongoose.Types.ObjectId.isValid(code) ? code : null
+                }
             ]
         });
 
@@ -685,6 +773,7 @@ function joinSocketToVoiceRoom(socket, roomName, serverId, channelId) {
         username: username,
         serverId: serverId,
         channelId: channelId,
+        avatarData: socket.avatarData || "",
         isStreaming: false,
         isMuted: false,
         isSpeaking: false
@@ -712,12 +801,28 @@ function joinSocketToVoiceRoom(socket, roomName, serverId, channelId) {
     console.log(username + " joined voice room " + roomName);
 }
 
-io.on("connection", (socket) => {
+io.on("connection", async (socket) => {
     const sessionUser = socket.request.session.user;
 
     if (!sessionUser) {
         socket.disconnect();
         return;
+    }
+
+    socket.username = sessionUser.username;
+    socket.avatarData = "";
+
+    try {
+        const user = await User.findOne({
+            usernameLower: sessionUser.username.toLowerCase()
+        });
+
+        if (user) {
+            socket.avatarData = user.avatarData || "";
+        }
+
+    } catch (err) {
+        console.error("SOCKET AVATAR LOAD ERROR:", err);
     }
 
     console.log("CONNECTED:", socket.id, sessionUser.username);
@@ -911,6 +1016,34 @@ io.on("connection", (socket) => {
 
         if (user.serverId && user.serverId !== "legacy") {
             emitServerChannelUsers(user.serverId);
+        }
+    });
+
+    socket.on("avatar-updated", ({ avatarData }) => {
+        socket.avatarData = String(avatarData || "");
+
+        const room = socket.voiceRoom;
+
+        if (room && voiceRooms[room]) {
+            const user = voiceRooms[room].find(
+                u => u.id === socket.id
+            );
+
+            if (user) {
+                user.avatarData = socket.avatarData;
+            }
+
+            io.to(room).emit("user-profile-updated", {
+                id: socket.id,
+                username: socket.username,
+                avatarData: socket.avatarData
+            });
+
+            updateVoiceRoomList(room);
+
+            if (socket.currentServerId && socket.currentServerId !== "legacy") {
+                emitServerChannelUsers(socket.currentServerId);
+            }
         }
     });
 
