@@ -3,7 +3,8 @@ const {
     BrowserWindow,
     session,
     ipcMain,
-    dialog
+    dialog,
+    desktopCapturer
 } = require("electron");
 
 const path = require("path");
@@ -13,6 +14,70 @@ const APP_URL = "https://noxvoice.onrender.com";
 
 let mainWindow = null;
 let updateWindow = null;
+
+/* ================= SCREEN SHARE PERMISSION ================= */
+
+function setupScreenShareHandler() {
+    session.defaultSession.setDisplayMediaRequestHandler((request, callback) => {
+        desktopCapturer.getSources({
+            types: ["screen", "window"],
+            thumbnailSize: {
+                width: 320,
+                height: 180
+            },
+            fetchWindowIcons: true
+        }).then((sources) => {
+            if (!sources || sources.length === 0) {
+                console.log("No screen sources found");
+                callback({
+                    video: null,
+                    audio: null
+                });
+                return;
+            }
+
+            const screenSource =
+                sources.find((source) => {
+                    return String(source.name || "").toLowerCase().includes("screen");
+                }) ||
+                sources.find((source) => {
+                    return String(source.id || "").toLowerCase().includes("screen");
+                }) ||
+                sources[0];
+
+            console.log("Screen share source selected:", screenSource.name);
+
+            callback({
+                video: screenSource,
+                audio: "loopback"
+            });
+        }).catch((err) => {
+            console.error("Screen share source error:", err);
+
+            callback({
+                video: null,
+                audio: null
+            });
+        });
+    });
+
+    session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
+        const url = webContents.getURL();
+
+        if (url.startsWith(APP_URL)) {
+            if (
+                permission === "media" ||
+                permission === "display-capture" ||
+                permission === "fullscreen"
+            ) {
+                callback(true);
+                return;
+            }
+        }
+
+        callback(false);
+    });
+}
 
 /* ================= UPDATE WINDOW ================= */
 
@@ -288,6 +353,7 @@ function checkForUpdatesBeforeLogin() {
 /* ================= APP EVENTS ================= */
 
 app.whenReady().then(() => {
+    setupScreenShareHandler();
     checkForUpdatesBeforeLogin();
 
     app.on("activate", () => {
