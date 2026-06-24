@@ -1,4 +1,4 @@
-console.log("NOXVOICE APP LOADED - STREAM CONNECTED STATE FIX");
+console.log("NOXVOICE APP LOADED - STOP STREAM ON LEAVE VOICE");
 
 const socket = io();
 
@@ -1970,7 +1970,51 @@ leaveVoiceBtn.onclick = () => {
     leaveCurrentVoice(true);
 };
 
+
+function forceStopStreamOnLeave() {
+    if (!isStreaming && !screenStream) {
+        return;
+    }
+
+    isStreaming = false;
+    streamingUsers[socket.id] = false;
+
+    socket.emit("stream-status", {
+        isStreaming: false
+    });
+
+    Object.keys(peers).forEach(async (id) => {
+        const peer = peers[id];
+
+        if (peer) {
+            removeScreenTracksFromPeer(peer);
+            await renegotiatePeer(id);
+        }
+    });
+
+    if (screenStream) {
+        screenStream.getTracks().forEach((track) => {
+            track.stop();
+        });
+    }
+
+    screenStream = null;
+    screenTrack = null;
+
+    removeLocalScreenPreview();
+
+    streamBtn.innerText = "🖥️ Start Stream";
+
+    const localCard = document.getElementById("stream-card-local");
+
+    if (localCard) {
+        localCard.remove();
+    }
+}
+
 function leaveCurrentVoice(updateUi) {
+    forceStopStreamOnLeave();
+
     socket.emit("speaking-status", {
         isSpeaking: false
     });
@@ -2311,7 +2355,9 @@ async function startScreenStream() {
 }
 
 async function stopScreenStream() {
-    if (!isStreaming) {
+    if (!isStreaming && !screenStream) {
+        streamBtn.innerText = "🖥️ Start Stream";
+        removeLocalScreenPreview();
         return;
     }
 
@@ -2323,7 +2369,12 @@ async function stopScreenStream() {
         isStreaming: false
     });
 
-    showSelfInActiveChannel();
+    if (hasJoinedVoice) {
+        showSelfInActiveChannel();
+    } else {
+        renderChannels();
+        renderCurrentUsers();
+    }
 
     Object.keys(peers).forEach(async (id) => {
         const peer = peers[id];
