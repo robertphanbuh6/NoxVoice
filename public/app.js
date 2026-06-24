@@ -1,4 +1,4 @@
-console.log("NOXVOICE APP LOADED - SETTINGS GEAR FIX");
+console.log("NOXVOICE APP LOADED - ENHANCED MIC NOISE CANCELLATION");
 
 const socket = io();
 
@@ -46,6 +46,17 @@ let activeVoiceChannel = null;
 let currentVoiceUsers = [];
 
 let localStream = null;
+let rawMicStream = null;
+let processedMicStream = null;
+
+let micAudioContext = null;
+let micSourceNode = null;
+let micHighPassNode = null;
+let micLowPassNode = null;
+let micCompressorNode = null;
+let micGateNode = null;
+let micDestinationNode = null;
+
 let screenStream = null;
 let screenTrack = null;
 
@@ -53,10 +64,6 @@ let micReady = false;
 let muted = false;
 let isStreaming = false;
 let hasJoinedVoice = false;
-
-/* Keep voice connection separate from the server you are browsing */
-let connectedVoiceServer = null;
-let connectedVoiceChannel = null;
 
 const peers = {};
 const userVolumes = {};
@@ -242,9 +249,11 @@ function updateSettingsButtonAvatar() {
         return;
     }
 
-    // Keep settings button as settings icon.
-    // Avatar should only show beside user names, not on the settings button.
-    settingsButton.innerHTML = "⚙️";
+    if (myAvatarData) {
+        settingsButton.innerHTML = `<img src="${myAvatarData}" alt="avatar">`;
+    } else {
+        settingsButton.innerHTML = "⚙️";
+    }
 }
 
 function closeSettingsModal() {
@@ -1436,13 +1445,8 @@ function showHomeView(leaveVoice) {
     serverInfoTitle.innerText = "No server selected";
     serverInfoText.innerText = "Click a server icon from the left side to open it.";
 
-    if (hasJoinedVoice && connectedVoiceServer && connectedVoiceChannel) {
-        voiceStatusTitle.innerText = "Voice Connected";
-        voiceStatusText.innerText = connectedVoiceChannel.name + " / " + connectedVoiceServer.name;
-    } else {
-        voiceStatusTitle.innerText = "Voice Disconnected";
-        voiceStatusText.innerText = "Not connected to any channel";
-    }
+    voiceStatusTitle.innerText = "Voice Disconnected";
+    voiceStatusText.innerText = "Not connected to any channel";
 
     status.innerText = "Choose a server";
 
@@ -1483,9 +1487,7 @@ function selectServer(serverId) {
         return;
     }
 
-    // IMPORTANT:
-    // Do NOT call leaveCurrentVoice() here.
-    // Clicking another server should only change the view, not disconnect voice.
+    leaveCurrentVoice(false);
 
     activeServer = found;
     activeVoiceChannel = null;
@@ -1505,13 +1507,8 @@ function selectServer(serverId) {
     renderChannels();
     renderCurrentUsers();
 
-    if (hasJoinedVoice && connectedVoiceServer && connectedVoiceChannel) {
-        voiceStatusTitle.innerText = "Voice Connected";
-        voiceStatusText.innerText = connectedVoiceChannel.name + " / " + connectedVoiceServer.name;
-    } else {
-        voiceStatusTitle.innerText = "Voice Disconnected";
-        voiceStatusText.innerText = "Not connected to any channel";
-    }
+    voiceStatusTitle.innerText = "Voice Disconnected";
+    voiceStatusText.innerText = "Not connected to any channel";
 
     status.innerText = "Server opened: " + activeServer.name;
 
@@ -1727,6 +1724,129 @@ async function selectVoiceChannel(channel) {
     joinSelectedVoiceChannel();
 }
 
+
+/* ================= BETTER MIC AUDIO PROCESSING ================= */
+
+async function createBetterMicStream(rawStream) {
+    if (micAudioContext) {
+        try {
+            await micAudioContext.close();
+        } catch (err) {
+            console.log("Old mic audio context close error:", err);
+        }
+    }
+
+    micAudioContext = new (window.AudioContext || window.webkitAudioContext)({
+        sampleRate: 48000
+    });
+
+    if (micAudioContext.state === "suspended") {
+        await micAudioContext.resume();
+    }
+
+    micSourceNode = micAudioContext.createMediaStreamSource(rawStream);
+
+    micHighPassNode = micAudioContext.createBiquadFilter();
+    micHighPassNode.type = "highpass";
+    micHighPassNode.frequency.value = 90;
+    micHighPassNode.Q.value = 0.7;
+
+    micLowPassNode = micAudioContext.createBiquadFilter();
+    micLowPassNode.type = "lowpass";
+    micLowPassNode.frequency.value = 9000;
+    micLowPassNode.Q.value = 0.7;
+
+    micCompressorNode = micAudioContext.createDynamicsCompressor();
+    micCompressorNode.threshold.value = -35;
+    micCompressorNode.knee.value = 24;
+    micCompressorNode.ratio.value = 4;
+    micCompressorNode.attack.value = 0.004;
+    micCompressorNode.release.value = 0.18;
+
+    micGateNode = micAudioContext.createScriptProcessor(2048, 1, 1);
+
+    let gateOpen = false;
+    let lastVoiceTime = 0;
+
+    micGateNode.onaudioprocess = function (event) {
+        const input = event.inputBuffer.getChannelData(0);
+        const output = event.outputBuffer.getChannelData(0);
+
+        let sum = 0;
+
+        for (let i = 0; i < input.length; i++) {
+            sum += input[i] * input[i];
+        }
+
+        const rms = Math.sqrt(sum / input.length);
+        const now = Date.now();
+
+        const openThreshold = 0.017;
+        const closeThreshold = 0.008;
+        const holdTimeMs = 180;
+
+        if (rms > openThreshold) {
+            gateOpen = true;
+            lastVoiceTime = now;
+        }
+
+        if (rms < closeThreshold && now - lastVoiceTime > holdTimeMs) {
+            gateOpen = false;
+        }
+
+        for (let i = 0; i < input.length; i++) {
+            if (gateOpen) {
+                output[i] = input[i];
+            } else {
+                output[i] = input[i] * 0.10;
+            }
+        }
+    };
+
+    micDestinationNode = micAudioContext.createMediaStreamDestination();
+
+    micSourceNode
+        .connect(micHighPassNode)
+        .connect(micLowPassNode)
+        .connect(micCompressorNode)
+        .connect(micGateNode)
+        .connect(micDestinationNode);
+
+    return micDestinationNode.stream;
+}
+
+function stopMicProcessing() {
+    if (rawMicStream) {
+        rawMicStream.getTracks().forEach((track) => {
+            track.stop();
+        });
+    }
+
+    if (processedMicStream) {
+        processedMicStream.getTracks().forEach((track) => {
+            track.stop();
+        });
+    }
+
+    if (micAudioContext) {
+        micAudioContext.close().catch(() => {});
+    }
+
+    rawMicStream = null;
+    processedMicStream = null;
+    localStream = null;
+
+    micAudioContext = null;
+    micSourceNode = null;
+    micHighPassNode = null;
+    micLowPassNode = null;
+    micCompressorNode = null;
+    micGateNode = null;
+    micDestinationNode = null;
+
+    micReady = false;
+}
+
 /* ================= MIC ================= */
 async function enableMicIfNeeded() {
     if (micReady && localStream) {
@@ -1734,18 +1854,25 @@ async function enableMicIfNeeded() {
     }
 
     try {
-        localStream = await navigator.mediaDevices.getUserMedia({
+        rawMicStream = await navigator.mediaDevices.getUserMedia({
             audio: {
                 echoCancellation: true,
                 noiseSuppression: true,
-                autoGainControl: true
+                autoGainControl: true,
+                channelCount: 1,
+                sampleRate: 48000,
+                sampleSize: 16,
+                latency: 0.02
             },
             video: false
         });
 
+        processedMicStream = await createBetterMicStream(rawMicStream);
+        localStream = processedMicStream;
+
         micReady = true;
 
-        status.innerText = "Mic ON 🎤";
+        status.innerText = "Mic ON with enhanced audio 🎤";
 
         Object.values(peers).forEach((peer) => {
             addMicTracksToPeer(peer);
@@ -1790,8 +1917,6 @@ function joinSelectedVoiceChannel() {
     resetRemoteMediaAndPeers();
 
     hasJoinedVoice = true;
-    connectedVoiceServer = activeServer;
-    connectedVoiceChannel = activeVoiceChannel;
 
     showSelfInActiveChannel();
 
@@ -1851,10 +1976,6 @@ function leaveCurrentVoice(updateUi) {
 
     currentVoiceUsers = [];
     hasJoinedVoice = false;
-    connectedVoiceServer = null;
-    connectedVoiceChannel = null;
-    connectedVoiceServer = null;
-    connectedVoiceChannel = null;
 
     if (updateUi) {
         status.innerText = "Left voice channel";
@@ -1879,6 +2000,12 @@ function toggleSelfMute() {
     localStream.getAudioTracks().forEach(track => {
         track.enabled = !muted;
     });
+
+    if (rawMicStream) {
+        rawMicStream.getAudioTracks().forEach(track => {
+            track.enabled = !muted;
+        });
+    }
 
     mutedUsers[socket.id] = muted;
 
@@ -1908,7 +2035,7 @@ function toggleSelfMute() {
         status.innerText = "You are muted 🔇";
         muteBtn.innerText = "🔊 Unmute";
     } else {
-        status.innerText = "Mic ON 🎤";
+        status.innerText = "Mic ON with enhanced audio 🎤";
         muteBtn.innerText = "🔇 Mute";
     }
 }
@@ -1921,6 +2048,7 @@ muteBtn.onclick = () => {
 logoutBtn.onclick = async () => {
     stopChannelUserRefresh();
     stopSpeakingDetection();
+    stopMicProcessing();
 
     await fetch("/api/logout", {
         method: "POST"
@@ -2786,7 +2914,6 @@ createVoiceChannelBtn.onclick = createVoiceChannel;
 
 if (homeServerBtn) {
     homeServerBtn.onclick = () => {
-        // Home only changes the view. It should not disconnect voice.
-        showHomeView(false);
+        showHomeView(true);
     };
 }
