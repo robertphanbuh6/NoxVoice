@@ -1,4 +1,4 @@
-console.log("NOXVOICE APP LOADED - PERSIST USER VOLUMES");
+console.log("NOXVOICE APP LOADED - WATCH ONLY ONE STREAM");
 
 const socket = io();
 
@@ -686,39 +686,96 @@ function createAvatarElement(user) {
 }
 
 
-/* ================= SAVED USER VOLUME ================= */
+/* ================= SAVED USER VOLUME V2 ================= */
 
-function getVolumeUserKey(user) {
-    const name = String(user && user.username ? user.username : "").trim().toLowerCase();
+const USER_VOLUME_STORAGE_KEY = "noxvoice_saved_user_volumes_v2";
 
-    if (!name) {
-        return "";
+function normalizeVolumeUsername(usernameText) {
+    return String(usernameText || "")
+        .trim()
+        .toLowerCase();
+}
+
+function loadSavedUserVolumeMap() {
+    try {
+        const raw = localStorage.getItem(USER_VOLUME_STORAGE_KEY);
+
+        if (!raw) {
+            return {};
+        }
+
+        const parsed = JSON.parse(raw);
+
+        if (!parsed || typeof parsed !== "object") {
+            return {};
+        }
+
+        return parsed;
+
+    } catch (err) {
+        console.log("Volume map load error:", err);
+        return {};
+    }
+}
+
+function saveUserVolumeMap(map) {
+    try {
+        localStorage.setItem(USER_VOLUME_STORAGE_KEY, JSON.stringify(map));
+    } catch (err) {
+        console.log("Volume map save error:", err);
+    }
+}
+
+function getKnownUserById(id) {
+    if (!id) {
+        return null;
     }
 
-    return "noxvoice_volume_" + name;
+    const fromCurrent = currentVoiceUsers.find((user) => user.id === id);
+
+    if (fromCurrent) {
+        return fromCurrent;
+    }
+
+    const allChannelUsers = Object.values(serverChannelUsers).flat();
+
+    return allChannelUsers.find((user) => user.id === id) || null;
 }
 
 function getSavedVolumeForUser(user) {
     try {
-        const key = getVolumeUserKey(user);
-
-        if (!key) {
+        if (!user || !user.username) {
             return null;
         }
 
-        const saved = localStorage.getItem(key);
+        const usernameKey = normalizeVolumeUsername(user.username);
 
-        if (saved === null || saved === "") {
+        if (!usernameKey) {
             return null;
         }
 
-        const value = Number(saved);
+        const map = loadSavedUserVolumeMap();
 
-        if (Number.isNaN(value)) {
-            return null;
+        if (map[usernameKey] !== undefined) {
+            const value = Number(map[usernameKey]);
+
+            if (!Number.isNaN(value)) {
+                return Math.max(0, Math.min(1, value));
+            }
         }
 
-        return Math.max(0, Math.min(1, value));
+        // Old fallback key from previous build.
+        const oldSaved = localStorage.getItem("noxvoice_volume_" + usernameKey);
+
+        if (oldSaved !== null && oldSaved !== "") {
+            const oldValue = Number(oldSaved);
+
+            if (!Number.isNaN(oldValue)) {
+                return Math.max(0, Math.min(1, oldValue));
+            }
+        }
+
+        return null;
 
     } catch (err) {
         console.log("Saved volume read error:", err);
@@ -728,15 +785,27 @@ function getSavedVolumeForUser(user) {
 
 function saveVolumeForUser(user, value) {
     try {
-        const key = getVolumeUserKey(user);
+        if (!user || !user.username) {
+            return;
+        }
 
-        if (!key) {
+        const usernameKey = normalizeVolumeUsername(user.username);
+
+        if (!usernameKey) {
             return;
         }
 
         const safeValue = Math.max(0, Math.min(1, Number(value)));
 
-        localStorage.setItem(key, String(safeValue));
+        const map = loadSavedUserVolumeMap();
+        map[usernameKey] = safeValue;
+
+        saveUserVolumeMap(map);
+
+        // Keep old key too, in case older app.js checks it.
+        localStorage.setItem("noxvoice_volume_" + usernameKey, String(safeValue));
+
+        console.log("Saved volume:", user.username, Math.round(safeValue * 100) + "%");
 
     } catch (err) {
         console.log("Saved volume write error:", err);
@@ -748,17 +817,19 @@ function applySavedVolumeForUser(user) {
         return;
     }
 
-    const savedVolume = getSavedVolumeForUser(user);
+    if (userVolumes[user.id] === undefined) {
+        const savedVolume = getSavedVolumeForUser(user);
 
-    if (savedVolume !== null && userVolumes[user.id] === undefined) {
-        userVolumes[user.id] = savedVolume;
+        if (savedVolume !== null) {
+            userVolumes[user.id] = savedVolume;
+        }
     }
 
     applyUserAudioSettings(user.id);
 }
 
 function applySavedVolumesForUsers(users) {
-    if (!users || !Array.isArray(users)) {
+    if (!Array.isArray(users)) {
         return;
     }
 
@@ -852,7 +923,6 @@ async function refreshServerChannelUsers() {
                 mutedUsers[user.id] = !!user.isMuted;
                 speakingUsers[user.id] = !!user.isSpeaking;
                 userAvatars[user.id] = user.avatarData || "";
-        applySavedVolumeForUser(user);
 
                 if (allUsersMuted && user.id !== socket.id) {
                     userMuted[user.id] = true;
@@ -1159,13 +1229,7 @@ function showUserVolumeMenu(event, user) {
     slider.min = "0";
     slider.max = "1";
     slider.step = "0.01";
-    if (userVolumes[user.id] === undefined) {
-        const savedVolume = getSavedVolumeForUser(user);
-
-        if (savedVolume !== null) {
-            userVolumes[user.id] = savedVolume;
-        }
-    }
+    applySavedVolumeForUser(user);
 
     slider.value = userVolumes[user.id] ?? 1;
     slider.className = "right-click-volume-slider";
@@ -1231,7 +1295,19 @@ function showUserVolumeMenu(event, user) {
 }
 
 /* ================= WATCH STREAM FUNCTIONS ================= */
+
+function closeAllWatchedStreamsExcept(keepId) {
+    Object.keys(watchingStreams).forEach((id) => {
+        if (id !== keepId) {
+            closeWatchedStream(id);
+        }
+    });
+}
+
 function watchUserStream(user) {
+    // Only allow watching one remote stream at a time.
+    closeAllWatchedStreamsExcept(user.id);
+
     watchingStreams[user.id] = true;
 
     if (!remoteVideoTracks[user.id]) {
@@ -1253,6 +1329,9 @@ function closeWatchedStream(id) {
 }
 
 function showRemoteStream(id, usernameText) {
+    // Extra safety: remove other remote watched streams.
+    closeAllWatchedStreamsExcept(id);
+
     const videoTrack = remoteVideoTracks[id];
 
     if (!videoTrack) {
@@ -1773,6 +1852,8 @@ function renderChannels() {
         }
 
         const channelUsers = getUsersForChannel(channel.id);
+        applySavedVolumesForUsers(channelUsers);
+
         const countText = channelUsers.length > 0 ? channelUsers.length : "";
 
         div.innerHTML = `
@@ -2633,21 +2714,7 @@ function handleRemoteAudio(id, event) {
         audio.autoplay = true;
         audio.controls = true;
         audio.playsInline = true;
-        if (userVolumes[id] === undefined) {
-            const knownUser =
-                currentVoiceUsers.find((user) => user.id === id) ||
-                Object.values(serverChannelUsers)
-                    .flat()
-                    .find((user) => user.id === id);
-
-            if (knownUser) {
-                const savedVolume = getSavedVolumeForUser(knownUser);
-
-                if (savedVolume !== null) {
-                    userVolumes[id] = savedVolume;
-                }
-            }
-        }
+        applyUserAudioSettings(id);
 
         audio.volume = userVolumes[id] ?? 1;
         audio.muted = userMuted[id] ?? false;
@@ -2681,6 +2748,18 @@ function handleRemoteAudio(id, event) {
 }
 
 function applyUserAudioSettings(id) {
+    if (userVolumes[id] === undefined) {
+        const knownUser = getKnownUserById(id);
+
+        if (knownUser) {
+            const savedVolume = getSavedVolumeForUser(knownUser);
+
+            if (savedVolume !== null) {
+                userVolumes[id] = savedVolume;
+            }
+        }
+    }
+
     const audios = document.querySelectorAll(".remote-audio-" + id);
 
     audios.forEach((audio) => {
@@ -2843,7 +2922,6 @@ socket.on("voice-joined-confirmed", ({ serverId, channelId, users }) => {
         mutedUsers[user.id] = !!user.isMuted;
         speakingUsers[user.id] = !!user.isSpeaking;
         userAvatars[user.id] = user.avatarData || "";
-        applySavedVolumeForUser(user);
 
         if (allUsersMuted && user.id !== socket.id) {
             userMuted[user.id] = true;
@@ -2892,7 +2970,6 @@ socket.on("server-channel-users", ({ serverId, channels }) => {
             mutedUsers[user.id] = !!user.isMuted;
             speakingUsers[user.id] = !!user.isSpeaking;
             userAvatars[user.id] = user.avatarData || "";
-        applySavedVolumeForUser(user);
 
             if (allUsersMuted && user.id !== socket.id) {
                 userMuted[user.id] = true;
@@ -3123,7 +3200,6 @@ socket.on("voice-user-list", (users) => {
         mutedUsers[user.id] = !!user.isMuted;
         speakingUsers[user.id] = !!user.isSpeaking;
         userAvatars[user.id] = user.avatarData || "";
-        applySavedVolumeForUser(user);
 
         if (allUsersMuted && user.id !== socket.id) {
             userMuted[user.id] = true;
@@ -3158,7 +3234,6 @@ socket.on("user-list", (users) => {
         mutedUsers[user.id] = !!user.isMuted;
         speakingUsers[user.id] = !!user.isSpeaking;
         userAvatars[user.id] = user.avatarData || "";
-        applySavedVolumeForUser(user);
 
         if (allUsersMuted && user.id !== socket.id) {
             userMuted[user.id] = true;
@@ -3191,6 +3266,8 @@ socket.on("join-error", (data) => {
 
 /* ================= USER LIST ================= */
 function renderCurrentUsers() {
+    applySavedVolumesForUsers(currentVoiceUsers);
+
     userList.innerHTML = "";
 
     currentVoiceUsers.forEach((u) => {
