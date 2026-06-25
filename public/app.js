@@ -1,4 +1,4 @@
-console.log("NOXVOICE APP LOADED - MULTI USER VOICE RECONNECT FIX");
+console.log("NOXVOICE APP LOADED - STREAM AUDIO AND MIC VOICE ENABLED");
 
 const socket = io();
 
@@ -63,6 +63,9 @@ let screenTrack = null;
 let micReady = false;
 let muted = false;
 let isStreaming = false;
+
+// Stream audio ON by default: viewers hear game/system audio + your mic voice separately.
+let shareStreamAudio = true;
 let hasJoinedVoice = false;
 
 /* Keep voice connection separate from the server you are browsing */
@@ -2135,7 +2138,8 @@ function addScreenTracksToPeer(peer) {
         return;
     }
 
-    screenStream.getTracks().forEach((track) => {
+    // Always send screen/window video.
+    screenStream.getVideoTracks().forEach((track) => {
         const alreadyAdded = peer.getSenders().some(
             sender => sender.track === track
         );
@@ -2144,6 +2148,20 @@ function addScreenTracksToPeer(peer) {
             peer.addTrack(track, screenStream);
         }
     });
+
+    // Send game/system audio together with the stream.
+    // Your mic voice is still sent separately using localStream.
+    if (shareStreamAudio) {
+        screenStream.getAudioTracks().forEach((track) => {
+            const alreadyAdded = peer.getSenders().some(
+                sender => sender.track === track
+            );
+
+            if (!alreadyAdded) {
+                peer.addTrack(track, screenStream);
+            }
+        });
+    }
 }
 
 function removeScreenTracksFromPeer(peer) {
@@ -2310,7 +2328,18 @@ async function startScreenStream() {
         }
 
         screenStream = await navigator.mediaDevices.getDisplayMedia({
-            video: true,
+            video: {
+                frameRate: {
+                    ideal: 30,
+                    max: 60
+                },
+                width: {
+                    ideal: 1280
+                },
+                height: {
+                    ideal: 720
+                }
+            },
             audio: true
         });
 
@@ -2331,7 +2360,7 @@ async function startScreenStream() {
 
         streamBtn.innerText = "🛑 Stop Stream";
 
-        status.innerText = "Screen streaming with audio 🖥️🔊";
+        status.innerText = "Screen streaming with audio and mic voice 🖥️🔊🎤";
 
         showLocalScreenPreview(screenStream);
 
