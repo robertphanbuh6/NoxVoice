@@ -1,4 +1,4 @@
-console.log("NOXVOICE APP LOADED - STREAM AUDIO AND MIC VOICE ENABLED");
+console.log("NOXVOICE APP LOADED - PERSIST USER VOLUMES");
 
 const socket = io();
 
@@ -685,6 +685,89 @@ function createAvatarElement(user) {
     return avatar;
 }
 
+
+/* ================= SAVED USER VOLUME ================= */
+
+function getVolumeUserKey(user) {
+    const name = String(user && user.username ? user.username : "").trim().toLowerCase();
+
+    if (!name) {
+        return "";
+    }
+
+    return "noxvoice_volume_" + name;
+}
+
+function getSavedVolumeForUser(user) {
+    try {
+        const key = getVolumeUserKey(user);
+
+        if (!key) {
+            return null;
+        }
+
+        const saved = localStorage.getItem(key);
+
+        if (saved === null || saved === "") {
+            return null;
+        }
+
+        const value = Number(saved);
+
+        if (Number.isNaN(value)) {
+            return null;
+        }
+
+        return Math.max(0, Math.min(1, value));
+
+    } catch (err) {
+        console.log("Saved volume read error:", err);
+        return null;
+    }
+}
+
+function saveVolumeForUser(user, value) {
+    try {
+        const key = getVolumeUserKey(user);
+
+        if (!key) {
+            return;
+        }
+
+        const safeValue = Math.max(0, Math.min(1, Number(value)));
+
+        localStorage.setItem(key, String(safeValue));
+
+    } catch (err) {
+        console.log("Saved volume write error:", err);
+    }
+}
+
+function applySavedVolumeForUser(user) {
+    if (!user || !user.id || user.id === socket.id) {
+        return;
+    }
+
+    const savedVolume = getSavedVolumeForUser(user);
+
+    if (savedVolume !== null && userVolumes[user.id] === undefined) {
+        userVolumes[user.id] = savedVolume;
+    }
+
+    applyUserAudioSettings(user.id);
+}
+
+function applySavedVolumesForUsers(users) {
+    if (!users || !Array.isArray(users)) {
+        return;
+    }
+
+    users.forEach((user) => {
+        applySavedVolumeForUser(user);
+    });
+}
+
+
 /* ================= MUTE ALL PLAYERS ================= */
 
 function applyMuteAllStateToKnownUsers() {
@@ -769,6 +852,7 @@ async function refreshServerChannelUsers() {
                 mutedUsers[user.id] = !!user.isMuted;
                 speakingUsers[user.id] = !!user.isSpeaking;
                 userAvatars[user.id] = user.avatarData || "";
+        applySavedVolumeForUser(user);
 
                 if (allUsersMuted && user.id !== socket.id) {
                     userMuted[user.id] = true;
@@ -1075,6 +1159,14 @@ function showUserVolumeMenu(event, user) {
     slider.min = "0";
     slider.max = "1";
     slider.step = "0.01";
+    if (userVolumes[user.id] === undefined) {
+        const savedVolume = getSavedVolumeForUser(user);
+
+        if (savedVolume !== null) {
+            userVolumes[user.id] = savedVolume;
+        }
+    }
+
     slider.value = userVolumes[user.id] ?? 1;
     slider.className = "right-click-volume-slider";
 
@@ -1084,6 +1176,7 @@ function showUserVolumeMenu(event, user) {
 
     slider.oninput = () => {
         userVolumes[user.id] = Number(slider.value);
+        saveVolumeForUser(user, userVolumes[user.id]);
         percent.innerText = Math.round(userVolumes[user.id] * 100) + "%";
         applyUserAudioSettings(user.id);
     };
@@ -2540,6 +2633,22 @@ function handleRemoteAudio(id, event) {
         audio.autoplay = true;
         audio.controls = true;
         audio.playsInline = true;
+        if (userVolumes[id] === undefined) {
+            const knownUser =
+                currentVoiceUsers.find((user) => user.id === id) ||
+                Object.values(serverChannelUsers)
+                    .flat()
+                    .find((user) => user.id === id);
+
+            if (knownUser) {
+                const savedVolume = getSavedVolumeForUser(knownUser);
+
+                if (savedVolume !== null) {
+                    userVolumes[id] = savedVolume;
+                }
+            }
+        }
+
         audio.volume = userVolumes[id] ?? 1;
         audio.muted = userMuted[id] ?? false;
 
@@ -2734,6 +2843,7 @@ socket.on("voice-joined-confirmed", ({ serverId, channelId, users }) => {
         mutedUsers[user.id] = !!user.isMuted;
         speakingUsers[user.id] = !!user.isSpeaking;
         userAvatars[user.id] = user.avatarData || "";
+        applySavedVolumeForUser(user);
 
         if (allUsersMuted && user.id !== socket.id) {
             userMuted[user.id] = true;
@@ -2782,6 +2892,7 @@ socket.on("server-channel-users", ({ serverId, channels }) => {
             mutedUsers[user.id] = !!user.isMuted;
             speakingUsers[user.id] = !!user.isSpeaking;
             userAvatars[user.id] = user.avatarData || "";
+        applySavedVolumeForUser(user);
 
             if (allUsersMuted && user.id !== socket.id) {
                 userMuted[user.id] = true;
@@ -3012,6 +3123,7 @@ socket.on("voice-user-list", (users) => {
         mutedUsers[user.id] = !!user.isMuted;
         speakingUsers[user.id] = !!user.isSpeaking;
         userAvatars[user.id] = user.avatarData || "";
+        applySavedVolumeForUser(user);
 
         if (allUsersMuted && user.id !== socket.id) {
             userMuted[user.id] = true;
@@ -3046,6 +3158,7 @@ socket.on("user-list", (users) => {
         mutedUsers[user.id] = !!user.isMuted;
         speakingUsers[user.id] = !!user.isSpeaking;
         userAvatars[user.id] = user.avatarData || "";
+        applySavedVolumeForUser(user);
 
         if (allUsersMuted && user.id !== socket.id) {
             userMuted[user.id] = true;
