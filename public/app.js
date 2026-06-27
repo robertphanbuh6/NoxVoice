@@ -1,4 +1,4 @@
-console.log("NOXVOICE APP LOADED - NATIVE FULLSCREEN CAPTURE");
+console.log("NOXVOICE APP LOADED - CLEAN MIC NOISE GATE FULL REPLACE");
 
 const socket = io();
 
@@ -1140,7 +1140,7 @@ function detectSpeakingLoop() {
 
     const rms = Math.sqrt(sum / speakingDataArray.length);
 
-    const speakingThreshold = 10;
+    const speakingThreshold = 14;
     const stopDelayMs = 550;
     const now = Date.now();
 
@@ -1921,6 +1921,26 @@ async function selectVoiceChannel(channel) {
 
 /* ================= BETTER MIC AUDIO PROCESSING ================= */
 
+const NOX_MIC_GATE_CONFIG = {
+    // Higher openThreshold blocks more far background noise.
+    // If your voice cuts too much, lower to 0.035.
+    openThreshold: 0.050,
+
+    // Close threshold should be lower than open threshold to avoid fast cutting.
+    closeThreshold: 0.020,
+
+    // Keeps mic open briefly after speech so words do not cut.
+    holdTimeMs: 220,
+
+    // Smooth open/close values.
+    attack: 0.35,
+    release: 0.08,
+
+    // Filters.
+    highPassHz: 100,
+    lowPassHz: 8500
+};
+
 async function createBetterMicStream(rawStream) {
     if (micAudioContext) {
         try {
@@ -1940,76 +1960,105 @@ async function createBetterMicStream(rawStream) {
 
     micSourceNode = micAudioContext.createMediaStreamSource(rawStream);
 
-    // Removes low rumble / fan / table vibration
+    // Removes low rumble / fan / table vibration.
     micHighPassNode = micAudioContext.createBiquadFilter();
     micHighPassNode.type = "highpass";
-    micHighPassNode.frequency.value = 90;
+    micHighPassNode.frequency.value = NOX_MIC_GATE_CONFIG.highPassHz;
     micHighPassNode.Q.value = 0.7;
 
-    // Removes harsh high hiss
+    // Removes harsh high hiss.
     micLowPassNode = micAudioContext.createBiquadFilter();
     micLowPassNode.type = "lowpass";
-    micLowPassNode.frequency.value = 9000;
+    micLowPassNode.frequency.value = NOX_MIC_GATE_CONFIG.lowPassHz;
     micLowPassNode.Q.value = 0.7;
 
-    // Makes voice volume more stable
+    // Analyser checks mic loudness before the gate.
+    const micAnalyserNode = micAudioContext.createAnalyser();
+    micAnalyserNode.fftSize = 1024;
+    micAnalyserNode.smoothingTimeConstant = 0.18;
+
+    // Real noise gate. When closed, background noise is muted.
+    micGateNode = micAudioContext.createGain();
+    micGateNode.gain.value = 0;
+
+    // Makes close speech clearer without browser auto-gain boosting far sounds.
     micCompressorNode = micAudioContext.createDynamicsCompressor();
-    micCompressorNode.threshold.value = -35;
-    micCompressorNode.knee.value = 24;
-    micCompressorNode.ratio.value = 4;
+    micCompressorNode.threshold.value = -28;
+    micCompressorNode.knee.value = 22;
+    micCompressorNode.ratio.value = 3;
     micCompressorNode.attack.value = 0.004;
     micCompressorNode.release.value = 0.18;
 
-    // Soft noise gate
-    micGateNode = micAudioContext.createScriptProcessor(2048, 1, 1);
+    micDestinationNode = micAudioContext.createMediaStreamDestination();
+
+    micSourceNode.connect(micHighPassNode);
+    micHighPassNode.connect(micLowPassNode);
+
+    // One branch measures volume.
+    micLowPassNode.connect(micAnalyserNode);
+
+    // One branch sends gated/clean voice.
+    micLowPassNode
+        .connect(micGateNode)
+        .connect(micCompressorNode)
+        .connect(micDestinationNode);
+
+    const data = new Uint8Array(micAnalyserNode.fftSize);
 
     let gateOpen = false;
+    let currentGain = 0;
     let lastVoiceTime = 0;
 
-    micGateNode.onaudioprocess = function (event) {
-        const input = event.inputBuffer.getChannelData(0);
-        const output = event.outputBuffer.getChannelData(0);
+    function gateLoop() {
+        if (!micAudioContext || !micGateNode || micAudioContext.state === "closed") {
+            return;
+        }
+
+        micAnalyserNode.getByteTimeDomainData(data);
 
         let sum = 0;
 
-        for (let i = 0; i < input.length; i++) {
-            sum += input[i] * input[i];
+        for (let i = 0; i < data.length; i++) {
+            const value = (data[i] - 128) / 128;
+            sum += value * value;
         }
 
-        const rms = Math.sqrt(sum / input.length);
-        const now = Date.now();
+        const volume = Math.sqrt(sum / data.length);
+        const now = performance.now();
 
-        const openThreshold = 0.017;
-        const closeThreshold = 0.008;
-        const holdTimeMs = 180;
-
-        if (rms > openThreshold) {
+        if (!gateOpen && volume >= NOX_MIC_GATE_CONFIG.openThreshold) {
             gateOpen = true;
             lastVoiceTime = now;
         }
 
-        if (rms < closeThreshold && now - lastVoiceTime > holdTimeMs) {
-            gateOpen = false;
-        }
+        if (gateOpen) {
+            if (volume >= NOX_MIC_GATE_CONFIG.closeThreshold) {
+                lastVoiceTime = now;
+            }
 
-        for (let i = 0; i < input.length; i++) {
-            if (gateOpen) {
-                output[i] = input[i];
-            } else {
-                // Do not fully cut audio, so the mic does not sound robotic
-                output[i] = input[i] * 0.10;
+            if (volume < NOX_MIC_GATE_CONFIG.closeThreshold &&
+                now - lastVoiceTime > NOX_MIC_GATE_CONFIG.holdTimeMs) {
+                gateOpen = false;
             }
         }
-    };
 
-    micDestinationNode = micAudioContext.createMediaStreamDestination();
+        const targetGain = muted ? 0 : (gateOpen ? 1 : 0);
+        const speed = targetGain > currentGain
+            ? NOX_MIC_GATE_CONFIG.attack
+            : NOX_MIC_GATE_CONFIG.release;
 
-    micSourceNode
-        .connect(micHighPassNode)
-        .connect(micLowPassNode)
-        .connect(micCompressorNode)
-        .connect(micGateNode)
-        .connect(micDestinationNode);
+        currentGain += (targetGain - currentGain) * speed;
+
+        if (currentGain < 0.001) {
+            currentGain = 0;
+        }
+
+        micGateNode.gain.value = currentGain;
+
+        requestAnimationFrame(gateLoop);
+    }
+
+    gateLoop();
 
     return micDestinationNode.stream;
 }
@@ -2046,6 +2095,7 @@ function stopMicProcessing() {
     micReady = false;
 }
 
+
 /* ================= MIC ================= */
 async function enableMicIfNeeded() {
     if (micReady && localStream) {
@@ -2057,7 +2107,7 @@ async function enableMicIfNeeded() {
             audio: {
                 echoCancellation: true,
                 noiseSuppression: true,
-                autoGainControl: true,
+                autoGainControl: false,
                 channelCount: 1,
                 sampleRate: 48000,
                 sampleSize: 16,
@@ -2071,7 +2121,7 @@ async function enableMicIfNeeded() {
 
         micReady = true;
 
-        status.innerText = "Mic ON with enhanced audio 🎤";
+        status.innerText = "Mic ON with clean noise gate 🎤";
 
         Object.values(peers).forEach((peer) => {
             addMicTracksToPeer(peer);
@@ -2280,7 +2330,7 @@ function toggleSelfMute() {
         status.innerText = "You are muted 🔇";
         muteBtn.innerText = "🔊 Unmute";
     } else {
-        status.innerText = "Mic ON with enhanced audio 🎤";
+        status.innerText = "Mic ON with clean noise gate 🎤";
         muteBtn.innerText = "🔇 Mute";
     }
 }

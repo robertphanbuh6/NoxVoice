@@ -1,12 +1,13 @@
 {
   "name": "noxvoice",
-  "version": "1.0.4",
+  "version": "1.0.7",
   "description": "NoxVoice voice chat app",
   "main": "main.js",
   "author": "NoxVoice",
   "private": false,
   "scripts": {
-    "start": "node server.js",
+    "start": "electron .",
+    "server": "node server.js",
     "electron": "electron .",
     "dist": "electron-builder",
     "publish": "electron-builder --publish always"
@@ -27,17 +28,29 @@
   "build": {
     "appId": "com.noxvoice.app",
     "productName": "NoxVoice",
+    "artifactName": "NoxVoice-Setup-${version}.${ext}",
+    "icon": "build/icon.ico",
     "directories": {
       "output": "dist"
     },
     "files": [
       "main.js",
-      "package.json"
+      "preload.js",
+      "server.js",
+      "package.json",
+      "public/**/*",
+      "native-capture/**/*",
+      "build/icon.ico",
+      "node_modules/**/*"
     ],
     "win": {
-      "target": "nsis"
+      "target": "nsis",
+      "icon": "build/icon.ico"
     },
     "nsis": {
+      "artifactName": "NoxVoice-Setup-${version}.${ext}",
+      "installerIcon": "build/icon.ico",
+      "uninstallerIcon": "build/icon.ico",
       "oneClick": false,
       "perMachine": false,
       "allowToChangeInstallationDirectory": true,
