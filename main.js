@@ -4,7 +4,10 @@ const {
     session,
     dialog,
     desktopCapturer,
-    ipcMain
+    ipcMain,
+    Tray,
+    Menu,
+    nativeImage
 } = require("electron");
 
 const { autoUpdater } = require("electron-updater");
@@ -15,6 +18,12 @@ const APP_URL = "https://noxvoice.onrender.com";
 let mainWindow = null;
 let updateWindow = null;
 let streamPickerWindow = null;
+let tray = null;
+let hasShownTrayTip = false;
+
+// When false, clicking the top-right X will hide the app to the Windows tray.
+// This becomes true only for real app quit / auto-update install / tray Exit.
+let isRealQuit = false;
 
 /* ================= WINDOW / SCREEN STREAM PICKER ================= */
 
@@ -816,6 +825,111 @@ function closeUpdateWindow() {
     updateWindow = null;
 }
 
+
+/* ================= SYSTEM TRAY ================= */
+
+function getTrayIcon() {
+    const iconPath = path.join(__dirname, "build", "icon.ico");
+
+    try {
+        const icon = nativeImage.createFromPath(iconPath);
+
+        if (!icon.isEmpty()) {
+            return icon;
+        }
+    } catch (err) {
+        console.log("Tray icon file not found, using fallback icon:", err.message);
+    }
+
+    // Fallback small transparent PNG so the tray still works if build/icon.ico is missing.
+    return nativeImage.createFromDataURL(
+        "data:image/png;base64," +
+        "iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAYAAAAf8/9hAAAAGUlEQVR42mP8z8Dwn4ECwESJ5lEDRgYAw0wCHYHkX4AAAAAASUVORK5CYII="
+    );
+}
+
+function showMainWindow() {
+    if (!mainWindow || mainWindow.isDestroyed()) {
+        createMainWindow();
+        return;
+    }
+
+    mainWindow.show();
+    mainWindow.restore();
+    mainWindow.focus();
+}
+
+function hideMainWindowToTray() {
+    if (!mainWindow || mainWindow.isDestroyed()) {
+        return;
+    }
+
+    mainWindow.hide();
+
+    if (tray && !hasShownTrayTip) {
+        hasShownTrayTip = true;
+
+        try {
+            tray.displayBalloon({
+                title: "NoxVoice is still running",
+                content: "NoxVoice was minimized to the hidden icons tray. Click the tray icon to open it again."
+            });
+        } catch (err) {
+            console.log("Tray balloon not shown:", err.message);
+        }
+    }
+}
+
+function createTray() {
+    if (tray) {
+        return tray;
+    }
+
+    tray = new Tray(getTrayIcon());
+    tray.setToolTip("NoxVoice");
+
+    const trayMenu = Menu.buildFromTemplate([
+        {
+            label: "Open NoxVoice",
+            click: () => {
+                showMainWindow();
+            }
+        },
+        {
+            label: "Hide NoxVoice",
+            click: () => {
+                hideMainWindowToTray();
+            }
+        },
+        { type: "separator" },
+        {
+            label: "Exit NoxVoice",
+            click: () => {
+                isRealQuit = true;
+
+                if (tray) {
+                    tray.destroy();
+                    tray = null;
+                }
+
+                app.quit();
+            }
+        }
+    ]);
+
+    tray.setContextMenu(trayMenu);
+
+    tray.on("click", () => {
+        showMainWindow();
+    });
+
+    tray.on("double-click", () => {
+        showMainWindow();
+    });
+
+    return tray;
+}
+
 /* ================= MAIN WINDOW ================= */
 
 function createMainWindow() {
@@ -861,6 +975,15 @@ function createMainWindow() {
         .catch(() => {
             mainWindow.loadURL(APP_URL + "/?desktopFresh=" + Date.now());
         });
+
+    mainWindow.on("close", (event) => {
+        if (isRealQuit) {
+            return;
+        }
+
+        event.preventDefault();
+        hideMainWindowToTray();
+    });
 
     mainWindow.on("closed", () => {
         mainWindow = null;
@@ -931,18 +1054,33 @@ function checkForUpdatesBeforeLogin() {
 /* ================= APP EVENTS ================= */
 
 app.whenReady().then(() => {
+    createTray();
     setupScreenShareHandler();
     checkForUpdatesBeforeLogin();
 
     app.on("activate", () => {
+        if (mainWindow && !mainWindow.isDestroyed()) {
+            showMainWindow();
+            return;
+        }
+
         if (BrowserWindow.getAllWindows().length === 0) {
             checkForUpdatesBeforeLogin();
         }
     });
 });
 
+app.on("before-quit", () => {
+    isRealQuit = true;
+
+    if (tray) {
+        tray.destroy();
+        tray = null;
+    }
+});
+
 app.on("window-all-closed", () => {
-    if (process.platform !== "darwin") {
+    if (process.platform !== "darwin" && isRealQuit) {
         app.quit();
     }
 });
