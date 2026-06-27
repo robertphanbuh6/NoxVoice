@@ -1,0 +1,17 @@
+{
+  "name": "native-capture",
+  "version": "1.0.0",
+  "description": "NoxVoice native monitor capture test for fullscreen games",
+  "main": "monitor-test.js",
+  "gypfile": true,
+  "scripts": {
+    "build": "node-gyp configure build",
+    "rebuild": "node-gyp rebuild",
+    "monitor-test": "electron monitor-test.js 0 60",
+    "test": "node index.js"
+  },
+  "dependencies": {
+    "node-addon-api": "^8.5.0"
+  },
+  "devDependencies": {}
+}

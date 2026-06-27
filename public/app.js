@@ -1,4 +1,4 @@
-console.log("NOXVOICE APP LOADED - WATCH ONLY ONE STREAM");
+console.log("NOXVOICE APP LOADED - NATIVE FULLSCREEN CAPTURE");
 
 const socket = io();
 
@@ -66,6 +66,16 @@ let isStreaming = false;
 
 // Stream audio ON by default: viewers hear game/system audio + your mic voice separately.
 let shareStreamAudio = true;
+
+// Native fullscreen monitor capture is EXE-only.
+let nativeCaptureCanvas = null;
+let nativeCaptureContext = null;
+let nativeCaptureTimer = null;
+let nativeCaptureRunning = false;
+let nativeCaptureModeActive = false;
+let nativeCaptureFps = 30;
+let nativeCaptureMonitorIndex = 0;
+
 let hasJoinedVoice = false;
 
 /* Keep voice connection separate from the server you are browsing */
@@ -2150,6 +2160,8 @@ leaveVoiceBtn.onclick = () => {
 
 
 function forceStopStreamOnLeave() {
+    stopNativeCaptureLoop();
+
     if (!isStreaming && !screenStream) {
         return;
     }
@@ -2439,12 +2451,210 @@ function removeLocalScreenPreview() {
 /* ================= SCREEN STREAM ================= */
 streamBtn.onclick = async () => {
     if (!isStreaming) {
-        await startScreenStream();
+        await chooseAndStartStream();
     } else {
         await stopScreenStream();
     }
 };
 
+
+
+function isNativeCaptureAvailable() {
+    return Boolean(
+        window.noxNativeCapture &&
+        typeof window.noxNativeCapture.isAvailable === "function" &&
+        window.noxNativeCapture.isAvailable()
+    );
+}
+
+function stopNativeCaptureLoop() {
+    nativeCaptureRunning = false;
+    nativeCaptureModeActive = false;
+
+    if (nativeCaptureTimer) {
+        clearTimeout(nativeCaptureTimer);
+        nativeCaptureTimer = null;
+    }
+
+    nativeCaptureCanvas = null;
+    nativeCaptureContext = null;
+}
+
+function ensureNativeCaptureCanvas() {
+    if (!nativeCaptureCanvas) {
+        nativeCaptureCanvas = document.createElement("canvas");
+        nativeCaptureCanvas.id = "nox-native-capture-canvas";
+        nativeCaptureCanvas.style.display = "none";
+        document.body.appendChild(nativeCaptureCanvas);
+    }
+
+    if (!nativeCaptureContext) {
+        nativeCaptureContext = nativeCaptureCanvas.getContext("2d", {
+            alpha: false
+        });
+    }
+
+    return nativeCaptureCanvas;
+}
+
+function startNativeCaptureLoop() {
+    nativeCaptureRunning = true;
+
+    const drawFrame = () => {
+        if (!nativeCaptureRunning || !screenStream) {
+            return;
+        }
+
+        const started = performance.now();
+
+        try {
+            const frame = window.noxNativeCapture.captureMonitorFrame(nativeCaptureMonitorIndex);
+
+            if (!frame || !frame.success) {
+                const message = frame && frame.message ? frame.message : "Native capture failed";
+                console.log("NATIVE CAPTURE:", message);
+                status.innerText = "Native capture waiting: " + message;
+            } else {
+                if (nativeCaptureCanvas.width !== frame.width || nativeCaptureCanvas.height !== frame.height) {
+                    nativeCaptureCanvas.width = frame.width;
+                    nativeCaptureCanvas.height = frame.height;
+                }
+
+                const image = new ImageData(
+                    new Uint8ClampedArray(frame.buffer),
+                    frame.width,
+                    frame.height
+                );
+
+                nativeCaptureContext.putImageData(image, 0, 0);
+            }
+        } catch (err) {
+            console.error("NATIVE CAPTURE LOOP ERROR:", err);
+            status.innerText = "Native capture error: " + err.message;
+        }
+
+        const frameTime = 1000 / nativeCaptureFps;
+        const spent = performance.now() - started;
+        const delay = Math.max(0, frameTime - spent);
+
+        nativeCaptureTimer = setTimeout(drawFrame, delay);
+    };
+
+    drawFrame();
+}
+
+async function chooseAndStartStream() {
+    if (isNativeCaptureAvailable()) {
+        const useNative = confirm(
+            "Use Native Fullscreen Capture for CS2/fullscreen games?\n\n" +
+            "OK = Native Fullscreen Capture (Monitor 0)\n" +
+            "Cancel = Normal Window/Screen picker"
+        );
+
+        if (useNative) {
+            await startNativeFullscreenStream();
+            return;
+        }
+    }
+
+    await startScreenStream();
+}
+
+async function startNativeFullscreenStream() {
+    repairConnectedVoiceState();
+
+    if (!isActuallyConnectedToVoice()) {
+        alert("Join a voice channel first before starting stream.");
+        return;
+    }
+
+    if (!isNativeCaptureAvailable()) {
+        alert("Native fullscreen capture is available only in the NoxVoice EXE after the native helper is built.");
+        return;
+    }
+
+    try {
+        if (!micReady) {
+            const micOk = await enableMicIfNeeded();
+
+            if (!micOk) {
+                alert("Enable mic first before streaming.");
+                return;
+            }
+        }
+
+        const monitors = window.noxNativeCapture.listMonitors();
+
+        if (!monitors || monitors.length === 0) {
+            alert("No monitor found for native fullscreen capture.");
+            return;
+        }
+
+        nativeCaptureMonitorIndex = 0;
+        nativeCaptureFps = 30;
+
+        const firstFrame = window.noxNativeCapture.captureMonitorFrame(nativeCaptureMonitorIndex);
+
+        if (!firstFrame || !firstFrame.success) {
+            alert("Native capture failed: " + (firstFrame && firstFrame.message ? firstFrame.message : "Unknown error"));
+            return;
+        }
+
+        const canvas = ensureNativeCaptureCanvas();
+        canvas.width = firstFrame.width;
+        canvas.height = firstFrame.height;
+
+        const firstImage = new ImageData(
+            new Uint8ClampedArray(firstFrame.buffer),
+            firstFrame.width,
+            firstFrame.height
+        );
+
+        nativeCaptureContext.putImageData(firstImage, 0, 0);
+
+        screenStream = canvas.captureStream(nativeCaptureFps);
+        screenTrack = screenStream.getVideoTracks()[0];
+
+        if (!screenTrack) {
+            alert("Native capture stream did not create a video track.");
+            stopNativeCaptureLoop();
+            return;
+        }
+
+        nativeCaptureModeActive = true;
+        isStreaming = true;
+        streamingUsers[socket.id] = true;
+
+        socket.emit("stream-status", {
+            isStreaming: true
+        });
+
+        streamBtn.innerText = "🛑 Stop Stream";
+        status.innerText = "Native fullscreen capture streaming Monitor 0 🖥️🎮";
+
+        showLocalScreenPreview(screenStream);
+        showSelfInActiveChannel();
+
+        startNativeCaptureLoop();
+
+        Object.keys(peers).forEach(async (id) => {
+            const peer = peers[id];
+
+            addScreenTracksToPeer(peer);
+
+            await renegotiatePeer(id);
+        });
+
+        screenTrack.onended = async () => {
+            await stopScreenStream();
+        };
+
+    } catch (err) {
+        console.error("NATIVE FULLSCREEN STREAM ERROR:", err);
+        alert("Native fullscreen stream failed: " + err.message);
+        stopNativeCaptureLoop();
+    }
+}
 
 function isActuallyConnectedToVoice() {
     if (hasJoinedVoice) {
@@ -2559,6 +2769,8 @@ async function startScreenStream() {
 }
 
 async function stopScreenStream() {
+    stopNativeCaptureLoop();
+
     if (!isStreaming && !screenStream) {
         streamBtn.innerText = "🖥️ Start Stream";
         removeLocalScreenPreview();

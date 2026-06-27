@@ -8,6 +8,7 @@ const {
 } = require("electron");
 
 const { autoUpdater } = require("electron-updater");
+const path = require("path");
 
 const APP_URL = "https://noxvoice.onrender.com";
 
@@ -120,7 +121,7 @@ async function chooseStreamSource(sources) {
             center: true,
             backgroundColor: "#11131a",
             show: false,
-            title: "NoxVoice Stream Picker",
+            title: "NoxVoice Game Mode Stream Picker",
             webPreferences: {
                 nodeIntegration: true,
                 contextIsolation: false
@@ -143,7 +144,7 @@ async function chooseStreamSource(sources) {
 <html>
 <head>
     <meta charset="UTF-8">
-    <title>NoxVoice Stream Picker</title>
+    <title>NoxVoice Game Mode Stream Picker</title>
     <style>
         * {
             box-sizing: border-box;
@@ -427,15 +428,15 @@ async function chooseStreamSource(sources) {
         <div class="header">
             <h1>Choose what to stream</h1>
             <div class="subtitle">
-                Select a specific game/window or your entire screen. Audio uses system loopback audio.
+                Use Game Mode for fullscreen games like CS2, or Window Mode for apps/borderless games. Audio uses system loopback audio.
             </div>
         </div>
 
         <div class="toolbar">
-            <button class="tab active" data-filter="All">All</button>
-            <button class="tab" data-filter="Window">Windows</button>
-            <button class="tab" data-filter="Screen">Screens</button>
-            <input id="search" class="search" placeholder="Search game or window..." />
+            <button class="tab active" data-filter="Screen">Game Mode</button>
+            <button class="tab" data-filter="Window">Window Mode</button>
+            <button class="tab" data-filter="All">All Sources</button>
+            <input id="search" class="search" placeholder="Search screen, game, or window..." />
         </div>
 
         <div class="content">
@@ -444,7 +445,7 @@ async function chooseStreamSource(sources) {
 
         <div class="footer">
             <div class="tip">
-                Tip: choose the game window if available. For fullscreen games, choose Entire Screen.
+                Tip: for CS2/fullscreen games, use Game Mode and choose your monitor. For apps/borderless games, use Window Mode.
             </div>
 
             <div class="buttons">
@@ -457,12 +458,15 @@ async function chooseStreamSource(sources) {
     <script>
         const { ipcRenderer } = require("electron");
 
-        const sources = ${JSON.stringify(payload)};
+        const sources = ${JSON.stringify(payload)}.sort((a, b) => {
+            if (a.type === b.type) return a.name.localeCompare(b.name);
+            return a.type === 'Screen' ? -1 : 1;
+        });
         const selectChannel = ${JSON.stringify(selectChannel)};
         const cancelChannel = ${JSON.stringify(cancelChannel)};
 
         let selectedId = "";
-        let filter = "All";
+        let filter = "Screen";
 
         const list = document.getElementById("list");
         const search = document.getElementById("search");
@@ -471,7 +475,7 @@ async function chooseStreamSource(sources) {
         const closeBtn = document.getElementById("closeBtn");
 
         function iconFor(source) {
-            return source.type === "Window" ? "▣" : "🖥️";
+            return source.type === "Window" ? "▣" : "🎮";
         }
 
         function visibleSources() {
@@ -535,9 +539,9 @@ async function chooseStreamSource(sources) {
                 meta.className = "meta";
 
                 if (source.type === "Window") {
-                    meta.innerText = "Specific window / game capture";
+                    meta.innerText = "Window Mode: best for apps and borderless games";
                 } else {
-                    meta.innerText = "Entire screen capture";
+                    meta.innerText = "Game Mode: best for fullscreen games like CS2";
                 }
 
                 text.appendChild(name);
@@ -545,7 +549,11 @@ async function chooseStreamSource(sources) {
 
                 const badge = document.createElement("div");
                 badge.className = "badge";
-                badge.innerText = source.type;
+                if (source.type === "Screen") {
+                    badge.innerText = "Game Mode";
+                } else {
+                    badge.innerText = "Window";
+                }
 
                 row.appendChild(icon);
                 row.appendChild(text);
@@ -822,7 +830,8 @@ function createMainWindow() {
         webPreferences: {
             nodeIntegration: false,
             contextIsolation: true,
-            webSecurity: true
+            webSecurity: true,
+            preload: path.join(__dirname, "preload.js")
         }
     });
 
